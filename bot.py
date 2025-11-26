@@ -85,13 +85,17 @@ class AppSelect(View):
 
 
 # =============================
-# CLOSE TICKET VIEW
+# CLOSE TICKET VIEW (FIXED)
 # =============================
 class CloseTicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.red)
+    @discord.ui.button(
+        label="🔒 Close Ticket",
+        style=discord.ButtonStyle.red,
+        custom_id="close_ticket_button"  # REQUIRED FOR PERSISTENT VIEW
+    )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         if not interaction.channel.name.startswith("ticket-"):
@@ -99,11 +103,10 @@ class CloseTicketView(View):
 
         log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
 
-        # Fetch messages
+        # Safely fetch messages
         messages = [msg async for msg in interaction.channel.history(limit=None)]
         messages.reverse()
 
-        # Build transcript safely
         transcript_chunks = []
         current = ""
 
@@ -115,12 +118,10 @@ class CloseTicketView(View):
             if len(current) + len(line) > 4000:
                 transcript_chunks.append(current)
                 current = ""
-
             current += line
 
         transcript_chunks.append(current)
 
-        # Send transcript parts
         for part in transcript_chunks:
             embed = discord.Embed(
                 title=f"📜 Transcript — {interaction.channel.name}",
