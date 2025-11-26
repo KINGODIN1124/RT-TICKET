@@ -92,46 +92,45 @@ class CloseTicketView(View):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🔒 Close Ticket",
-        style=discord.ButtonStyle.red,
-        custom_id="close_ticket_button"  # REQUIRED FOR PERSISTENT VIEW
+    label="🔒 Close Ticket",
+    style=discord.ButtonStyle.red,
+    custom_id="close_ticket_button"
+)
+async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+    if not interaction.channel.name.startswith("ticket-"):
+        return await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
+
+    msg = await interaction.response.send_message("🔒 Closing ticket in **5 seconds**…", ephemeral=True)
+
+    for i in range(4, 0, -1):
+        await asyncio.sleep(1)
+        await interaction.edit_original_response(
+            content=f"🔒 Closing ticket in **{i} seconds**…"
+        )
+
+    # Send transcript before deleting
+    log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
+    transcript_parts = await create_transcript(interaction.channel)
+
+    for part in transcript_parts:
+        embed = discord.Embed(
+            title=f"📜 Transcript — {interaction.channel.name}",
+            description=part,
+            color=discord.Color.blurple()
+        )
+        await log_channel.send(embed=embed)
+
+    # Notify ticket closed
+    await log_channel.send(
+        embed=discord.Embed(
+            title="🔒 Ticket Closed",
+            description=f"Closed by {interaction.user.mention}\nChannel: **{interaction.channel.name}**",
+            color=discord.Color.red()
+        )
     )
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        if not interaction.channel.name.startswith("ticket-"):
-            return await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
-
-        log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
-
-        # Safely fetch messages
-        messages = [msg async for msg in interaction.channel.history(limit=None)]
-        messages.reverse()
-
-        transcript_chunks = []
-        current = ""
-
-        for msg in messages:
-            line = f"[{msg.created_at:%Y-%m-%d %H:%M}] {msg.author.display_name}: {msg.content}\n"
-            for a in msg.attachments:
-                line += f"📎 {a.url}\n"
-
-            if len(current) + len(line) > 4000:
-                transcript_chunks.append(current)
-                current = ""
-            current += line
-
-        transcript_chunks.append(current)
-
-        for part in transcript_chunks:
-            embed = discord.Embed(
-                title=f"📜 Transcript — {interaction.channel.name}",
-                description=part,
-                color=discord.Color.blurple()
-            )
-            await log_channel.send(embed=embed)
-
-        await interaction.channel.delete()
-
+    await interaction.channel.delete()
 
 # =============================
 # VERIFICATION VIEW
@@ -223,10 +222,12 @@ async def ticket(interaction: discord.Interaction):
         interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
-    channel = await interaction.guild.create_text_channel(
-        f"ticket-{interaction.user.id}",
-        overwrites=overwrites
-    )
+    channel_name = f"ticket-{interaction.user.name}".replace(" ", "-").lower()
+
+channel = await interaction.guild.create_text_channel(
+    channel_name,
+    overwrites=overwrites
+)
 
     embed = discord.Embed(
         title="🎫 Ticket Created",
@@ -240,6 +241,33 @@ async def ticket(interaction: discord.Interaction):
         f"Ticket created: {channel.mention}",
         ephemeral=True
     )
+
+# --- /remove cooldown---
+@bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
+
+    if user.id in cooldowns:
+        del cooldowns[user.id]
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="✅ Cooldown Removed",
+                description=f"{user.mention} can now create a ticket again.",
+                color=discord.Color.green()
+            ),
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                title="ℹ️ No Cooldown Found",
+                description=f"{user.mention} currently has **no cooldown**.",
+                color=discord.Color.blue()
+            ),
+            ephemeral=True
+        )
 
 
 # --- /send_app ---
@@ -287,22 +315,29 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
 
     await interaction.response.send_message("Sent!", ephemeral=True)
 
-
-# --- /view_tickets ---
-@bot.tree.command(name="view_tickets", description="📊 View open tickets")
+# --- /view tickets---
+@bot.tree.command(name="view_tickets", description="📊 View number of currently open tickets")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def view_tickets(interaction: discord.Interaction):
 
-    tickets = [
-        c for c in interaction.guild.channels
-        if isinstance(c, discord.TextChannel) and c.name.startswith("ticket-")
+    # Count only EXISTING ticket channels
+    open_tickets = [
+        c for c in interaction.guild.text_channels
+        if c.name.startswith("ticket-")
     ]
 
     embed = discord.Embed(
-        title="🎟️ Ticket Overview",
-        description=f"Open tickets: **{len(tickets)}**",
+        title="🎟️ Open Tickets",
+        description=f"Currently open tickets: **{len(open_tickets)}**",
         color=discord.Color.blurple()
     )
+
+    if len(open_tickets) > 0:
+        embed.add_field(
+            name="Ticket Channels",
+            value="\n".join(f"📌 {c.mention}" for c in open_tickets),
+            inline=False
+        )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
