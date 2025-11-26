@@ -222,12 +222,13 @@ async def ticket(interaction: discord.Interaction):
         interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
+    # FIX: Indent these lines 4 spaces to place them inside the function
     channel_name = f"ticket-{interaction.user.name}".replace(" ", "-").lower()
 
-channel = await interaction.guild.create_text_channel(
-    channel_name,
-    overwrites=overwrites
-)
+    channel = await interaction.guild.create_text_channel(
+        channel_name,
+        overwrites=overwrites
+    )
 
     embed = discord.Embed(
         title="🎫 Ticket Created",
@@ -241,7 +242,6 @@ channel = await interaction.guild.create_text_channel(
         f"Ticket created: {channel.mention}",
         ephemeral=True
     )
-
 # --- /remove cooldown---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
