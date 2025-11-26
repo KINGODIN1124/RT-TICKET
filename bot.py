@@ -13,17 +13,31 @@ from threading import Thread
 # Environment Variables
 # ---------------------------
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID"))
-TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
+# NOTE: Using a robust way to ensure environment variables are present and valid integers
+try:
+    GUILD_ID = int(os.getenv("GUILD_ID"))
+    TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
+    VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
+except (TypeError, ValueError) as e:
+    raise ValueError(f"Missing or invalid required environment variable ID: {e}")
+
 YOUTUBE_CHANNEL_URL = os.getenv("YOUTUBE_CHANNEL_URL")
-VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
+if not YOUTUBE_CHANNEL_URL or not TOKEN:
+    raise ValueError("DISCORD_TOKEN and YOUTUBE_CHANNEL_URL environment variables are required.")
+
 
 # ---------------------------
 # Load / Save Apps
 # ---------------------------
 def load_apps():
-    with open("apps.json", "r") as f:
-        return json.load(f)
+    try:
+        with open("apps.json", "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: apps.json not found. Creating empty file.")
+        with open("apps.json", "w") as f:
+            json.dump({}, f)
+        return {}
 
 def save_apps(apps):
     with open("apps.json", "w") as f:
@@ -49,7 +63,36 @@ def run_flask():
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Using UTC timezone for consistent comparison
 cooldowns = {}  # 48-hour ticket cooldowns
+
+# ---------------------------
+# Helper Function for Transcripts
+# ---------------------------
+async def create_transcript(channel: discord.TextChannel) -> list[str]:
+    """Fetches channel history and splits it into chunks of 4000 characters."""
+    messages = [msg async for msg in channel.history(limit=None)]
+    messages.reverse()
+
+    transcript_chunks = []
+    current = ""
+
+    for msg in messages:
+        # Use UTC timestamp for consistency
+        line = f"[{msg.created_at.replace(tzinfo=datetime.timezone.utc):%Y-%m-%d %H:%M}] {msg.author.display_name}: {msg.content}\n"
+        for a in msg.attachments:
+            line += f"📎 {a.url}\n"
+
+        if len(current) + len(line) > 4000:
+            transcript_chunks.append(current)
+            current = ""
+
+        current += line
+
+    if current:
+        transcript_chunks.append(current)
+        
+    return transcript_chunks
 
 
 # =============================
@@ -57,7 +100,13 @@ cooldowns = {}  # 48-hour ticket cooldowns
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
-        super().__init__(placeholder="Select an app...", min_values=1, max_values=1, options=options)
+        super().__init__(
+            placeholder="Select an app...", 
+            min_values=1, 
+            max_values=1, 
+            options=options,
+            custom_id="app_select_dropdown"
+        )
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
@@ -78,73 +127,77 @@ class AppDropdown(Select):
 
 class AppSelect(View):
     def __init__(self, user):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800) # 30 minutes timeout for selection
         apps = load_apps()
         options = [discord.SelectOption(label=app, value=app) for app in apps.keys()]
         self.add_item(AppDropdown(options, user))
 
 
 # =============================
-# CLOSE TICKET VIEW (FIXED)
+# CLOSE TICKET VIEW (PERSISTENT)
 # =============================
 class CloseTicketView(View):
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=None) # Required for persistence
 
     @discord.ui.button(
-    label="🔒 Close Ticket",
-    style=discord.ButtonStyle.red,
-    custom_id="close_ticket_button"
-)
-async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-    if not interaction.channel.name.startswith("ticket-"):
-        return await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
-
-    msg = await interaction.response.send_message("🔒 Closing ticket in **5 seconds**…", ephemeral=True)
-
-    for i in range(4, 0, -1):
-        await asyncio.sleep(1)
-        await interaction.edit_original_response(
-            content=f"🔒 Closing ticket in **{i} seconds**…"
-        )
-
-    # Send transcript before deleting
-    log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
-    transcript_parts = await create_transcript(interaction.channel)
-
-    for part in transcript_parts:
-        embed = discord.Embed(
-            title=f"📜 Transcript — {interaction.channel.name}",
-            description=part,
-            color=discord.Color.blurple()
-        )
-        await log_channel.send(embed=embed)
-
-    # Notify ticket closed
-    await log_channel.send(
-        embed=discord.Embed(
-            title="🔒 Ticket Closed",
-            description=f"Closed by {interaction.user.mention}\nChannel: **{interaction.channel.name}**",
-            color=discord.Color.red()
-        )
+        label="🔒 Close Ticket",
+        style=discord.ButtonStyle.red,
+        custom_id="persistent_close_ticket_button" # Required for persistence
     )
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-    await interaction.channel.delete()
+        if not interaction.channel.name.startswith("ticket-"):
+            return await interaction.response.send_message("❌ Not a ticket channel.", ephemeral=True)
+
+        # Defer the response while we process the history/transcript
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
+        
+        # Collect Transcript using helper function
+        transcript_parts = await create_transcript(interaction.channel)
+
+        for i, part in enumerate(transcript_parts):
+            embed = discord.Embed(
+                title=f"📜 Transcript — {interaction.channel.name} (Part {i+1})",
+                description=part,
+                color=discord.Color.blurple()
+            )
+            await log_channel.send(embed=embed)
+
+        # Notify ticket closed
+        await log_channel.send(
+            embed=discord.Embed(
+                title="🔒 Ticket Closed",
+                description=f"Closed by {interaction.user.mention}\nChannel: **{interaction.channel.name}**",
+                color=discord.Color.red()
+            )
+        )
+        
+        # Give confirmation before deletion
+        await interaction.followup.send("✅ Ticket closed and transcript saved.", ephemeral=True)
+
+        # Delete Channel
+        await interaction.channel.delete()
+
 
 # =============================
 # VERIFICATION VIEW
 # =============================
 class VerificationView(View):
     def __init__(self, ticket_channel, user, app_name, screenshot_url):
-        super().__init__(timeout=None)
+        super().__init__(timeout=3600) # Timeout after 1 hour if not acted upon
         self.ticket_channel = ticket_channel
         self.user = user
         self.app_name = app_name
         self.screenshot_url = screenshot_url
 
-    @discord.ui.button(label="✅ Verify", style=discord.ButtonStyle.green)
+    @discord.ui.button(label="✅ Verify", style=discord.ButtonStyle.green, custom_id="verify_button")
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Admin permission check
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ You do not have permission to verify.", ephemeral=True)
 
         apps = load_apps()
         app_link = apps.get(self.app_name)
@@ -165,7 +218,7 @@ class VerificationView(View):
 
         try:
             await self.user.send(embed=embed)
-        except:
+        except discord.Forbidden:
             await self.ticket_channel.send("⚠ User has DMs disabled.")
 
         await self.ticket_channel.send(
@@ -176,12 +229,19 @@ class VerificationView(View):
             ),
             view=CloseTicketView()
         )
+        
+        # Disable buttons after action is taken
+        self.stop()
+        await interaction.message.edit(view=self)
 
         await interaction.response.send_message("Verified!", ephemeral=True)
 
-    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red)
+    @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="decline_button")
     async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
-
+        # Admin permission check
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ You do not have permission to decline.", ephemeral=True)
+            
         embed = discord.Embed(
             title="❌ Verification Declined",
             description="Please submit a valid screenshot.",
@@ -189,6 +249,11 @@ class VerificationView(View):
         )
 
         await self.ticket_channel.send(embed=embed)
+        
+        # Disable buttons after action is taken
+        self.stop()
+        await interaction.message.edit(view=self)
+        
         await interaction.response.send_message("Declined!", ephemeral=True)
 
 
@@ -202,10 +267,12 @@ class VerificationView(View):
 async def ticket(interaction: discord.Interaction):
 
     user = interaction.user
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
+    # Cooldown check
     if user.id in cooldowns and cooldowns[user.id] > now:
-        hours = int((cooldowns[user.id] - now).total_seconds() // 3600)
+        remaining = cooldowns[user.id] - now
+        hours = int(remaining.total_seconds() // 3600)
         return await interaction.response.send_message(
             embed=discord.Embed(
                 title="⏳ Cooldown Active",
@@ -219,11 +286,12 @@ async def ticket(interaction: discord.Interaction):
 
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        # Staff roles should be added here for viewing tickets
         interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
-    # FIX: Indent these lines 4 spaces to place them inside the function
-    channel_name = f"ticket-{interaction.user.name}".replace(" ", "-").lower()
+    # Use user ID for reliable channel naming (f"ticket-{user.id}")
+    channel_name = f"ticket-{interaction.user.id}"
 
     channel = await interaction.guild.create_text_channel(
         channel_name,
@@ -236,13 +304,14 @@ async def ticket(interaction: discord.Interaction):
         color=discord.Color.blurple()
     )
 
-    await channel.send(embed=embed, view=AppSelect(interaction.user))
+    await channel.send(f"Welcome {user.mention}!", embed=embed, view=AppSelect(interaction.user))
 
     await interaction.response.send_message(
         f"Ticket created: {channel.mention}",
         ephemeral=True
     )
-# --- /remove cooldown---
+
+# --- /remove_cooldown (NEW COMMAND) ---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
@@ -279,13 +348,11 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
     apps = load_apps()
 
     if app_name not in apps:
-        return await interaction.response.send_message(
-            "❌ App not found.",
-            ephemeral=True
-        )
+        return await interaction.response.send_message("❌ App not found.", ephemeral=True)
 
     link = apps[app_name]
 
+    # Find ticket channel using the reliable ID format (f"ticket-{user.id}")
     ticket_channel = discord.utils.get(
         interaction.guild.channels,
         name=f"ticket-{user.id}"
@@ -293,7 +360,7 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
 
     if not ticket_channel:
         return await interaction.response.send_message(
-            "❌ User has no open ticket.",
+            f"❌ User has no open ticket named ticket-{user.id}.",
             ephemeral=True
         )
 
@@ -313,36 +380,42 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
         view=CloseTicketView()
     )
 
-    await interaction.response.send_message("Sent!", ephemeral=True)
+    await interaction.response.send_message("Link sent to the ticket!", ephemeral=True)
 
-# --- /view tickets---
+# --- /view_tickets (FIXED COUNT) ---
 @bot.tree.command(name="view_tickets", description="📊 View number of currently open tickets")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_channels=True)
 async def view_tickets(interaction: discord.Interaction):
 
-    # Count only EXISTING ticket channels
+    # FIX: Counts only existing TextChannels starting with "ticket-"
     open_tickets = [
         c for c in interaction.guild.text_channels
         if c.name.startswith("ticket-")
     ]
 
     embed = discord.Embed(
-        title="🎟️ Open Tickets",
+        title="🎟️ Open Ticket Overview",
         description=f"Currently open tickets: **{len(open_tickets)}**",
         color=discord.Color.blurple()
     )
 
-    if len(open_tickets) > 0:
+    if open_tickets:
+        # Limit display to prevent hitting embed field limits
+        ticket_mentions = "\n".join(f"📌 {c.mention}" for c in open_tickets[:20])
+        if len(open_tickets) > 20:
+             ticket_mentions += f"\n...and {len(open_tickets) - 20} more."
+             
         embed.add_field(
-            name="Ticket Channels",
-            value="\n".join(f"📌 {c.mention}" for c in open_tickets),
+            name="Active Ticket Channels",
+            value=ticket_mentions,
             inline=False
         )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- /force_close FIXED ---
+# --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
@@ -354,12 +427,15 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
             ephemeral=True
         )
 
-    await interaction.response.send_message("Closing...", ephemeral=True)
-
-    # Manually trigger the close logic without faking a button click
+    # Defer response to allow time for transcript fetching
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    # Manually create an instance of the view and call the close method.
     view = CloseTicketView()
-    # We pass 'None' as the button argument because we are forcing it via command
-    await view.close_ticket(interaction, None)
+    # Pass None for the button argument
+    await view.close_ticket(interaction, None) 
+    
+    await interaction.followup.send(f"Successfully force-closed {channel.name} and logged transcript.")
 
 
 # =============================
@@ -388,7 +464,7 @@ async def on_message(message):
 
             embed = discord.Embed(
                 title="🧾 Verification Request",
-                description=f"User requested **{matched_app}**",
+                description=f"{message.author.mention} requested **{matched_app}**",
                 color=discord.Color.yellow()
             )
             embed.set_image(url=screenshot)
@@ -401,7 +477,7 @@ async def on_message(message):
             await message.channel.send(
                 embed=discord.Embed(
                     title="📸 Screenshot Received",
-                    description="Admin will verify soon!",
+                    description="Screenshot received! An Admin will verify soon. ⏳",
                     color=discord.Color.blue()
                 )
             )
@@ -411,7 +487,7 @@ async def on_message(message):
             await message.channel.send(
                 embed=discord.Embed(
                     title="📷 Screenshot Required",
-                    description="Upload the subscription screenshot.",
+                    description=f"You mentioned **{matched_app}**. Please upload the subscription screenshot.",
                     color=discord.Color.orange()
                 )
             )
@@ -435,5 +511,6 @@ async def on_ready():
 # =============================
 # RUN BOT
 # =============================
+# Start Flask server in a separate thread for the keep-alive function
 Thread(target=run_flask).start()
 bot.run(TOKEN)
