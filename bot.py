@@ -327,33 +327,33 @@ async def remove_app(interaction: discord.Interaction, app_name: str):
         color=discord.Color.red()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
 # --- /remove_cooldown ---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
 
+    # 🛑 FIX: Defer the interaction immediately to acknowledge it.
+    await interaction.response.defer(ephemeral=True)
+    
     if user.id in cooldowns:
         del cooldowns[user.id]
 
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="✅ Cooldown Removed",
-                description=f"{user.mention} can now create a ticket again. 🔓",
-                color=discord.Color.green()
-            ),
-            ephemeral=True
+        embed = discord.Embed(
+            title="✅ Cooldown Removed",
+            description=f"{user.mention} can now create a ticket again. 🔓",
+            color=discord.Color.green()
         )
     else:
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="ℹ️ No Cooldown Found",
-                description=f"{user.mention} currently has **no cooldown**.",
-                color=discord.Color.blue()
-            ),
-            ephemeral=True
+        embed = discord.Embed(
+            title="ℹ️ No Cooldown Found",
+            description=f"{user.mention} currently has **no cooldown**.",
+            color=discord.Color.blue()
         )
+    
+    # Use followup.send() for the final message
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 
 # --- /force_close ---
@@ -386,6 +386,7 @@ async def ticket(interaction: discord.Interaction):
     now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
     if user.id in cooldowns and cooldowns[user.id] > now:
+        # Response is used ONLY in the cooldown check and returns early. This is fine.
         remaining = cooldowns[user.id] - now
         hours = int(remaining.total_seconds() // 3600)
         return await interaction.response.send_message(
@@ -397,6 +398,9 @@ async def ticket(interaction: discord.Interaction):
             ephemeral=True
         )
 
+    # 🛑 FIX: Acknowledge the interaction immediately since channel creation can take time.
+    await interaction.response.defer(ephemeral=True, thinking=True) 
+
     cooldowns[user.id] = now + datetime.timedelta(hours=48)
 
     overwrites = {
@@ -404,6 +408,7 @@ async def ticket(interaction: discord.Interaction):
         interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
     }
 
+    # Use user ID for reliable channel naming
     channel_name = f"ticket-{interaction.user.id}"
 
     channel = await interaction.guild.create_text_channel(
@@ -419,10 +424,12 @@ async def ticket(interaction: discord.Interaction):
 
     await channel.send(f"Welcome {user.mention}!", embed=embed, view=AppSelect(interaction.user))
 
-    await interaction.response.send_message(
+    # 🛑 FIX: Use followup.send after deferring the response.
+    await interaction.followup.send(
         f"Ticket created: {channel.mention}",
         ephemeral=True
     )
+    
 
 # --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app to a user")
