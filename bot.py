@@ -217,8 +217,8 @@ class CloseTicketView(View):
 
         # Get Ticket Metadata
         ticket_opener = messages[0].author if messages else interaction.user
-        open_time = messages[0].created_at if messages else datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
-        close_time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+        open_time = messages[0].created_at if messages else datetime.datetime.now(datetime.timezone.utc)
+        close_time = datetime.datetime.now(datetime.timezone.utc)
         duration = close_time - open_time
         
         duration_str = str(duration).split('.')[0] 
@@ -237,6 +237,7 @@ class CloseTicketView(View):
         metadata_embed.add_field(name="Time Closed", value=f"{close_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
         metadata_embed.add_field(name="Ticket Duration", value=duration_str, inline=False)
 
+        # Send log embeds directly using the global 'bot' object
         await log_channel.send(embed=metadata_embed)
 
         # Log Transcript Parts
@@ -405,7 +406,7 @@ async def view_apps(interaction: discord.Interaction):
     embed.add_field(name="App Name & Link", value=app_list_str, inline=False)
     
     await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+
 
 # --- /remove_cooldown ---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
@@ -449,7 +450,7 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
-    # Create a temporary interaction object using the target channel for the close logic
+    # Custom class to pass correct context to the closing view
     class ForceCloseInteraction:
         def __init__(self, interaction, channel):
             self.user = interaction.user
@@ -462,26 +463,20 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
             await interaction.edit_original_response(content=content)
 
         async def send_message(self, *args, **kwargs):
-            # This is primarily used for the final confirmation message, which must go to the followup
             await interaction.followup.send(*args, **kwargs)
 
-    # Send initial message which will be edited by the countdown
     await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
 
     view = CloseTicketView()
     # Call the close logic using the target channel context. 
-    # NOTE: The actual log sending and deletion relies on global bot object and the target_channel reference.
     await view.close_ticket(ForceCloseInteraction(interaction, target_channel), None) 
     
-    # The channel is deleted inside close_ticket, so this final followup will fail if the channel is gone.
-    # We rely on the log being successful inside the view. 
-    # Final confirmation sent to the admin via the ephemeral message:
+    # Final confirmation is handled within the view's closing process.
     try:
         await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
-    except discord.errors.NotFound:
-        # If the channel is already deleted, the original interaction message might be gone.
-        pass.")
-
+    except:
+        # If the follow-up fails (e.g., channel deleted), we pass and rely on the log being sent.
+        pass
 
 # --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket")
@@ -563,19 +558,17 @@ async def view_tickets(interaction: discord.Interaction):
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
-# --- /ticket (COOLDOWN FIX) ---
+# --- /ticket ---
 @bot.tree.command(name="ticket", description="🎟️ Create a support ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
 
     user = interaction.user
-    # FIX: Use UTC.now() for accurate, timezone-aware comparison
     now = datetime.datetime.now(datetime.timezone.utc)
 
     if user.id in cooldowns and cooldowns[user.id] > now:
         remaining = cooldowns[user.id] - now
         
-        # Calculate time remaining in HH:MM:SS format
         time_left_str = str(remaining).split('.')[0] 
         
         return await interaction.response.send_message(
@@ -590,7 +583,6 @@ async def ticket(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    # FIX: Ensure cooldown expiry is also timezone-aware
     cooldowns[user.id] = now + datetime.timedelta(hours=48)
 
     overwrites = {
@@ -617,9 +609,7 @@ async def ticket(interaction: discord.Interaction):
         f"✅ Ticket created successfully! Head over to {channel.mention} to continue.",
         ephemeral=True
     )
-
-
-# =============================
+    # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
 @bot.event
@@ -694,4 +684,4 @@ async def on_ready():
 # RUN BOT
 # =============================
 Thread(target=run_flask).start()
-bot.run(TOKEN)
+bot.run
