@@ -35,7 +35,7 @@ def load_apps():
         with open("apps.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        # Define a default structure based on your data if file is missing
+        # Define a default structure if file is missing (adjust if needed)
         default_apps = {
             "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
             "youtube": "https://example.com/youtube-download",
@@ -90,7 +90,6 @@ async def create_transcript(channel: discord.TextChannel) -> tuple[list[str], li
     current = ""
 
     for msg in messages:
-        # Ensure consistent time format in transcript
         line = f"[{msg.created_at.replace(tzinfo=datetime.timezone.utc):%Y-%m-%d %H:%M:%S}] {msg.author.display_name} ({msg.author.id}): {msg.content}\n"
         for a in msg.attachments:
             line += f"📎 ATTACHMENT: {a.url}\n"
@@ -237,7 +236,6 @@ class CloseTicketView(View):
         metadata_embed.add_field(name="Time Closed", value=f"{close_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
         metadata_embed.add_field(name="Ticket Duration", value=duration_str, inline=False)
 
-        # Send log embeds directly using the global 'bot' object
         await log_channel.send(embed=metadata_embed)
 
         # Log Transcript Parts
@@ -432,7 +430,7 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- /force_close (FIXED CONTEXT) ---
+# --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
@@ -468,15 +466,13 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
     await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
 
     view = CloseTicketView()
-    # Call the close logic using the target channel context. 
     await view.close_ticket(ForceCloseInteraction(interaction, target_channel), None) 
     
-    # Final confirmation is handled within the view's closing process.
     try:
         await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
     except:
-        # If the follow-up fails (e.g., channel deleted), we pass and rely on the log being sent.
         pass
+
 
 # --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket")
@@ -609,7 +605,9 @@ async def ticket(interaction: discord.Interaction):
         f"✅ Ticket created successfully! Head over to {channel.mention} to continue.",
         ephemeral=True
     )
-    # =============================
+
+
+# =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
 @bot.event
@@ -677,11 +675,11 @@ async def on_ready():
     # Register persistent views
     bot.add_view(CloseTicketView())
 
-    print(f"🟢 Logged in as {bot.user}")
+    print(f"🟢 Bot logged in successfully as {bot.user}")
 
 
 # =============================
 # RUN BOT
 # =============================
 Thread(target=run_flask).start()
-bot.run
+bot.run(TOKEN)
