@@ -480,7 +480,7 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
         await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
     except discord.errors.NotFound:
         # If the channel is already deleted, the original interaction message might be gone.
-        pass. ✅")
+        pass. ")
 
 
 # --- /send_app ---
