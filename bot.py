@@ -376,6 +376,36 @@ async def remove_app(interaction: discord.Interaction, app_name: str):
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# --- /view_apps ---
+@bot.tree.command(name="view_apps", description="📋 View all applications and their links in the database")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def view_apps(interaction: discord.Interaction):
+    
+    current_apps = load_apps()
+    
+    if not current_apps:
+        embed = discord.Embed(
+            title="⚠️ No Apps Found",
+            description="The `apps.json` file is empty. Use `/add_app` to populate the list.",
+            color=discord.Color.orange()
+        )
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    app_list_str = ""
+    for app_key, link in current_apps.items():
+        app_list_str += f"**{app_key.title()}**: [Link]({link})\n"
+
+    embed = discord.Embed(
+        title="📋 Current Premium Apps List",
+        description="Below are all applications currently available in the ticket selection:",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="App Name & Link", value=app_list_str, inline=False)
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+
 # --- /remove_cooldown ---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
@@ -423,7 +453,7 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
         def __init__(self, interaction, channel):
             self.user = interaction.user
             self.guild = interaction.guild
-            self.response = interaction.followup # Use followup for logging messages
+            self.response = interaction.followup
             self.followup = interaction.followup
             self.channel = channel
             
@@ -431,18 +461,25 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
             await interaction.edit_original_response(content=content)
 
         async def send_message(self, *args, **kwargs):
-             # Ensure messages sent within the countdown go back to the source interaction
+            # This is primarily used for the final confirmation message, which must go to the followup
             await interaction.followup.send(*args, **kwargs)
 
-
-    # Use the original interaction to send the countdown message, then switch context for closing
+    # Send initial message which will be edited by the countdown
     await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
 
     view = CloseTicketView()
-    # Call the close logic using the target channel
+    # Call the close logic using the target channel context. 
+    # NOTE: The actual log sending and deletion relies on global bot object and the target_channel reference.
     await view.close_ticket(ForceCloseInteraction(interaction, target_channel), None) 
     
-    await interaction.followup.send(f"Successfully force-closed {target_channel.mention} and logged transcript. ✅")
+    # The channel is deleted inside close_ticket, so this final followup will fail if the channel is gone.
+    # We rely on the log being successful inside the view. 
+    # Final confirmation sent to the admin via the ephemeral message:
+    try:
+        await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
+    except discord.errors.NotFound:
+        # If the channel is already deleted, the original interaction message might be gone.
+        pass. ✅")
 
 
 # --- /send_app ---
