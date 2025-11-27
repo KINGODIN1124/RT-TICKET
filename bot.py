@@ -34,10 +34,19 @@ def load_apps():
         with open("apps.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        print("Warning: apps.json not found. Creating empty file.")
+        # Define a default structure based on your data if file is missing
+        default_apps = {
+            "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
+            "youtube": "https://example.com/youtube-download",
+            "kinemaster": "https://link-center.net/1438550/dP4XtgqcsuU1",
+            "hotstar": "https://link-target.net/1438550/WEPSuAD5cl5A",
+            "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu",
+            "castle": "https://example.com/castle-download"
+        }
+        print("Warning: apps.json not found. Using default data and creating file.")
         with open("apps.json", "w") as f:
-            json.dump({}, f)
-        return {}
+            json.dump(default_apps, f, indent=4)
+        return default_apps
 
 def save_apps(apps):
     """Saves the app list to apps.json."""
@@ -64,6 +73,7 @@ def run_flask():
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# Cooldowns stores timezone-aware datetime objects
 cooldowns = {} 
 
 # ---------------------------
@@ -79,6 +89,7 @@ async def create_transcript(channel: discord.TextChannel) -> tuple[list[str], li
     current = ""
 
     for msg in messages:
+        # Ensure consistent time format in transcript
         line = f"[{msg.created_at.replace(tzinfo=datetime.timezone.utc):%Y-%m-%d %H:%M:%S}] {msg.author.display_name} ({msg.author.id}): {msg.content}\n"
         for a in msg.attachments:
             line += f"📎 ATTACHMENT: {a.url}\n"
@@ -110,13 +121,21 @@ class AppDropdown(Select):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
-        app_name = self.values[0]
+        app_key = self.values[0]
+        app_name_display = app_key.title()
         
-        app_emoji = {"Netflix": "🎬", "Spotify": "🎵", "Hulu": "📺", "VPN": "🛡️", "Default": "💎"}.get(app_name, "💎")
+        app_emoji = {
+            "spotify": "🎧", 
+            "youtube": "▶️", 
+            "kinemaster": "🎬", 
+            "hotstar": "📺",
+            "truecaller": "📞", 
+            "castle": "🏰"
+        }.get(app_key, "💎")
 
         embed = discord.Embed(
-            title=f"{app_emoji} Verification Process for {app_name} - 3 Steps to Success!",
-            description=f"Welcome to the final stage for your **{app_name}** Premium access! Follow these steps carefully:\n\n"
+            title=f"{app_emoji} Verification Process for {app_name_display} - 3 Steps to Success!",
+            description=f"Welcome to the final stage for your **{app_name_display}** Premium access! Follow these steps carefully:\n\n"
                         "1️⃣ **SUBSCRIBE:** You must be subscribed to our official channel.\n"
                         "2️⃣ **SCREENSHOT:** Take a clear, full screenshot of your subscription proof.\n"
                         "3️⃣ **UPLOAD:** **Send the screenshot** in this ticket now. Please do not type any additional text.\n\n"
@@ -135,13 +154,23 @@ class AppSelect(View):
         current_apps = load_apps()
         
         options = []
-        for app_name in current_apps.keys():
-            emoji = {"Netflix": "🎬", "Spotify": "🎵", "Hulu": "📺", "VPN": "🛡️"}.get(app_name, "💎")
+        for app_key in current_apps.keys():
+            app_name_display = app_key.title()
+            
+            emoji = {
+                "spotify": "🎧", 
+                "youtube": "▶️", 
+                "kinemaster": "🎬", 
+                "hotstar": "📺",
+                "truecaller": "📞", 
+                "castle": "🏰"
+            }.get(app_key, "💎")
+            
             options.append(
                 discord.SelectOption(
-                    label=f"🌟 {app_name} Premium Access", 
-                    value=app_name,
-                    description=f"Instantly request the link for {app_name} access.",
+                    label=f"🌟 {app_name_display} Premium Access", 
+                    value=app_key,
+                    description=f"Instantly request the link for {app_name_display} access.",
                     emoji=emoji
                 )
             )
@@ -226,11 +255,11 @@ class CloseTicketView(View):
 # VERIFICATION VIEW
 # =============================
 class VerificationView(View):
-    def __init__(self, ticket_channel, user, app_name, screenshot_url):
+    def __init__(self, ticket_channel, user, app_name_key, screenshot_url):
         super().__init__(timeout=3600) 
         self.ticket_channel = ticket_channel
         self.user = user
-        self.app_name = app_name
+        self.app_name_key = app_name_key
         self.screenshot_url = screenshot_url
 
     @discord.ui.button(label="✅ Verify", style=discord.ButtonStyle.green, custom_id="verify_button")
@@ -239,14 +268,15 @@ class VerificationView(View):
             return await interaction.response.send_message("❌ You do not have permission to verify.", ephemeral=True)
 
         apps = load_apps()
-        app_link = apps.get(self.app_name)
+        app_link = apps.get(self.app_name_key)
+        app_name_display = self.app_name_key.title()
 
         if not app_link:
             return await interaction.response.send_message("❌ App not found.", ephemeral=True)
 
         embed = discord.Embed(
             title="✅ Verification Approved! Access Granted!",
-            description=f"Congratulations, {self.user.mention}! Your verification for **{self.app_name}** has been approved by {interaction.user.mention} (Admin/Owner).\n\n"
+            description=f"Congratulations, {self.user.mention}! Your verification for **{app_name_display}** has been approved by {interaction.user.mention} (Admin/Owner).\n\n"
                         f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({app_link})** ⬅️\n\n"
                         "Please use the link immediately.",
             color=discord.Color.green()
@@ -279,9 +309,11 @@ class VerificationView(View):
         if not interaction.user.guild_permissions.manage_guild:
             return await interaction.response.send_message("❌ You do not have permission to decline.", ephemeral=True)
             
+        app_name_display = self.app_name_key.title()
+        
         embed = discord.Embed(
             title="❌ Verification Declined",
-            description=f"Your screenshot proof was declined by {interaction.user.mention}. This usually means:\n"
+            description=f"Your screenshot proof for **{app_name_display}** was declined by {interaction.user.mention}. This usually means:\n"
                         "1. The subscription proof was incomplete.\n"
                         "2. The image was unclear/blurry.\n"
                         "Please resubmit a valid, full screenshot in the ticket.",
@@ -306,13 +338,15 @@ class VerificationView(View):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def add_app(interaction: discord.Interaction, app_name: str, app_link: str):
     
+    app_key = app_name.lower()
+    
     current_apps = load_apps()
-    current_apps[app_name] = app_link
+    current_apps[app_key] = app_link
     save_apps(current_apps)
     
     embed = discord.Embed(
         title="✅ App Successfully Added to Database",
-        description=f"The application **{app_name}** is now available for users to select.\n\n"
+        description=f"The application **{app_name.title()}** is now available for users to select.\n\n"
                     f"🔗 **Direct Link:** [Click Here]({app_link})",
         color=discord.Color.green()
     )
@@ -325,17 +359,19 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_app(interaction: discord.Interaction, app_name: str):
     
+    app_key = app_name.lower()
+    
     current_apps = load_apps()
     
-    if app_name not in current_apps:
-        return await interaction.response.send_message(f"❌ App **{app_name}** not found in the list. Please check the spelling.", ephemeral=True)
+    if app_key not in current_apps:
+        return await interaction.response.send_message(f"❌ App **{app_name.title()}** not found in the list. Please check the spelling.", ephemeral=True)
         
-    del current_apps[app_name]
+    del current_apps[app_key]
     save_apps(current_apps)
     
     embed = discord.Embed(
         title="🗑️ App Permanently Removed",
-        description=f"The application **{app_name}** has been successfully removed from the database and will no longer appear in the ticket dropdown.",
+        description=f"The application **{app_name.title()}** has been successfully removed from the database and will no longer appear in the ticket dropdown.",
         color=discord.Color.red()
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -364,38 +400,66 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- /force_close ---
-@bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel")
+# --- /force_close (FIXED CONTEXT) ---
+@bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
-async def force_close(interaction: discord.Interaction, channel: discord.TextChannel): 
+@app_commands.describe(channel="Optional: Specify a ticket channel to close.")
+async def force_close(interaction: discord.Interaction, channel: discord.TextChannel = None): 
 
-    if not channel.name.startswith("ticket-"):
+    # Determine the target channel
+    target_channel = channel or interaction.channel
+
+    if not isinstance(target_channel, discord.TextChannel) or not target_channel.name.startswith("ticket-"):
         return await interaction.response.send_message(
-            "❌ That is not a valid ticket channel. Please select a channel starting with 'ticket-'.",
+            "❌ This command must be used inside a ticket channel, or you must specify a valid ticket channel (e.g., `/force_close channel:#ticket-123`).",
             ephemeral=True
         )
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
+    # Create a temporary interaction object using the target channel for the close logic
+    class ForceCloseInteraction:
+        def __init__(self, interaction, channel):
+            self.user = interaction.user
+            self.guild = interaction.guild
+            self.response = interaction.followup # Use followup for logging messages
+            self.followup = interaction.followup
+            self.channel = channel
+            
+        async def edit_original_response(self, content):
+            await interaction.edit_original_response(content=content)
+
+        async def send_message(self, *args, **kwargs):
+             # Ensure messages sent within the countdown go back to the source interaction
+            await interaction.followup.send(*args, **kwargs)
+
+
+    # Use the original interaction to send the countdown message, then switch context for closing
+    await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
+
     view = CloseTicketView()
-    await view.close_ticket(interaction, None) 
+    # Call the close logic using the target channel
+    await view.close_ticket(ForceCloseInteraction(interaction, target_channel), None) 
     
-    await interaction.followup.send(f"Successfully force-closed {channel.mention} and logged transcript. ✅")
+    await interaction.followup.send(f"Successfully force-closed {target_channel.mention} and logged transcript. ✅")
 
 
-# --- /send_app (MOVED) ---
+# --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def send_app(interaction: discord.Interaction, app_name: str, user: discord.Member):
 
+    app_key = app_name.lower()
+    app_name_display = app_name.title()
+
     apps = load_apps()
 
-    if app_name not in apps:
-        return await interaction.response.send_message("❌ App not found.", ephemeral=True)
+    if app_key not in apps:
+        return await interaction.response.send_message(f"❌ App **{app_name_display}** not found.", ephemeral=True)
 
-    link = apps[app_name]
+    link = apps[app_key]
 
     ticket_channel = discord.utils.get(
         interaction.guild.channels,
@@ -410,7 +474,7 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
 
     embed = discord.Embed(
         title="✨ Premium App Delivered!",
-        description=f"Here is your link for **{app_name}**:\n[Click Here]({link})",
+        description=f"Here is your link for **{app_name_display}**:\n[Click Here]({link})",
         color=discord.Color.green()
     )
 
@@ -426,7 +490,7 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
 
     await interaction.response.send_message("Link sent to the ticket!", ephemeral=True)
 
-# --- /view_tickets (MOVED) ---
+# --- /view_tickets ---
 @bot.tree.command(name="view_tickets", description="📊 View number of currently open tickets")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
@@ -461,17 +525,19 @@ async def view_tickets(interaction: discord.Interaction):
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
-# --- /ticket ---
+# --- /ticket (COOLDOWN FIX) ---
 @bot.tree.command(name="ticket", description="🎟️ Create a support ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
 
     user = interaction.user
-    now = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
+    # FIX: Use UTC.now() for accurate, timezone-aware comparison
+    now = datetime.datetime.now(datetime.timezone.utc)
 
     if user.id in cooldowns and cooldowns[user.id] > now:
         remaining = cooldowns[user.id] - now
         
+        # Calculate time remaining in HH:MM:SS format
         time_left_str = str(remaining).split('.')[0] 
         
         return await interaction.response.send_message(
@@ -486,6 +552,7 @@ async def ticket(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True, thinking=True)
 
+    # FIX: Ensure cooldown expiry is also timezone-aware
     cooldowns[user.id] = now + datetime.timedelta(hours=48)
 
     overwrites = {
@@ -513,6 +580,7 @@ async def ticket(interaction: discord.Interaction):
         ephemeral=True
     )
 
+
 # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
@@ -528,9 +596,10 @@ async def on_message(message):
     apps = load_apps()
     content = message.content.lower()
 
-    matched_app = next((a for a in apps if a.lower() in content), None)
+    matched_app_key = next((key for key in apps if key in content), None)
 
-    if matched_app:
+    if matched_app_key:
+        matched_app_display = matched_app_key.title()
 
         if message.attachments:
 
@@ -539,14 +608,14 @@ async def on_message(message):
 
             embed = discord.Embed(
                 title="📸 Verification Proof Received!",
-                description=f"User {message.author.mention} submitted proof for **{matched_app}**.",
+                description=f"User {message.author.mention} submitted proof for **{matched_app_display}**.",
                 color=discord.Color.yellow()
             )
             embed.set_image(url=screenshot)
 
             await ver_channel.send(
                 embed=embed,
-                view=VerificationView(message.channel, message.author, matched_app, screenshot)
+                view=VerificationView(message.channel, message.author, matched_app_key, screenshot)
             )
 
             await message.channel.send(
@@ -562,7 +631,7 @@ async def on_message(message):
             await message.channel.send(
                 embed=discord.Embed(
                     title="📷 Screenshot Required",
-                    description=f"You mentioned **{matched_app}**. Please upload the subscription screenshot to proceed.",
+                    description=f"You mentioned **{matched_app_display}**. Please upload the subscription screenshot to proceed.",
                     color=discord.Color.orange()
                 )
             )
