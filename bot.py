@@ -112,6 +112,51 @@ async def create_transcript(channel: discord.TextChannel) -> tuple[list[str], li
     return transcript_chunks, messages
 
 # ---------------------------
+# CORE TICKET CLOSURE LOGIC (Shared by CloseTicketView and /force_close)
+# ---------------------------
+async def perform_ticket_closure(channel: discord.TextChannel, closer: discord.User):
+    """Performs logging and final deletion of the channel."""
+    
+    log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
+    
+    transcript_parts, messages = await create_transcript(channel)
+
+    # Get Ticket Metadata
+    ticket_opener = messages[0].author if messages else closer
+    open_time = messages[0].created_at if messages else datetime.datetime.now(datetime.timezone.utc)
+    close_time = datetime.datetime.now(datetime.timezone.utc)
+    duration = close_time - open_time
+    duration_str = str(duration).split('.')[0] 
+
+    # Log Metadata (Single Embed)
+    metadata_embed = discord.Embed(
+        title=f"📜 TICKET TRANSCRIPT LOG — {channel.name}",
+        description=f"Transcript for the ticket channel **{channel.name}** is attached below in multiple parts.",
+        color=discord.Color.red()
+    )
+    metadata_embed.add_field(name="Ticket Opener", value=ticket_opener.mention, inline=True)
+    metadata_embed.add_field(name="Ticket Closer", value=closer.mention, inline=True)
+    metadata_embed.add_field(name="\u200b", value="\u200b", inline=True)
+    
+    metadata_embed.add_field(name="Time Opened", value=f"{open_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
+    metadata_embed.add_field(name="Time Closed", value=f"{close_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
+    metadata_embed.add_field(name="Ticket Duration", value=duration_str, inline=False)
+
+    await log_channel.send(embed=metadata_embed)
+
+    # Log Transcript Parts
+    for i, part in enumerate(transcript_parts):
+        embed = discord.Embed(
+            title=f"📄 Transcript Data — Part {i+1}",
+            description=part,
+            color=discord.Color.blurple()
+        )
+        await log_channel.send(embed=embed)
+    
+    # Delete Channel (CRITICAL STEP)
+    await channel.delete()
+
+# ---------------------------
 # CORE TICKET LOGIC (Shared by /ticket and Button)
 # ---------------------------
 async def create_new_ticket(interaction: discord.Interaction):
@@ -200,12 +245,11 @@ async def create_new_ticket(interaction: discord.Interaction):
 
 
 # =============================
-# APP SELECT VIEW (MORE STYLISH)
+# APP SELECT VIEW (AESTHETIC UPDATE)
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
         super().__init__(
-            # Enhanced Placeholder text
             placeholder="🛒 Tap here to select your desired Premium App...", 
             min_values=1, 
             max_values=1, 
@@ -218,11 +262,12 @@ class AppDropdown(Select):
         app_key = self.values[0]
         app_name_display = app_key.title()
         
+        # Aesthetic update: Emojis for the title embed
         app_emoji = {
-            "spotify": "🎧", 
-            "youtube": "▶️", 
-            "kinemaster": "🎬", 
-            "hotstar": "📺",
+            "spotify": "🎶", 
+            "youtube": "📺", 
+            "kinemaster": "✍️", 
+            "hotstar": "⭐",
             "truecaller": "📞", 
             "castle": "🏰"
         }.get(app_key, "💎")
@@ -251,12 +296,12 @@ class AppSelect(View):
         for app_key in current_apps.keys():
             app_name_display = app_key.title()
             
-            # Using custom color-coded emojis for stylish options
+            # Aesthetic update: Emojis for the dropdown options
             emoji = {
-                "spotify": "🟢", # Green for music
-                "youtube": "🔴", # Red for video
-                "kinemaster": "🟡", # Yellow for editing
-                "hotstar": "🔵", # Blue for streaming
+                "spotify": "🎶", # Replaced circle color
+                "youtube": "📺", # Replaced circle color
+                "kinemaster": "✍️", # Replaced circle color
+                "hotstar": "⭐", # Replaced circle color
                 "truecaller": "📞", 
                 "castle": "🏰"
             }.get(app_key, "⚪")
@@ -265,7 +310,6 @@ class AppSelect(View):
                 discord.SelectOption(
                     label=f"{app_name_display} — Instant Access", 
                     value=app_key,
-                    # Descriptive detail is key
                     description=f"Secure your link for {app_name_display} Premium features.",
                     emoji=emoji
                 )
@@ -318,41 +362,9 @@ class CloseTicketView(View):
 
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
-        log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
-        
-        transcript_parts, messages = await create_transcript(interaction.channel)
-
-        ticket_opener = messages[0].author if messages else interaction.user
-        open_time = messages[0].created_at if messages else datetime.datetime.now(datetime.timezone.utc)
-        close_time = datetime.datetime.now(datetime.timezone.utc)
-        duration = close_time - open_time
-        
-        duration_str = str(duration).split('.')[0] 
-
-        metadata_embed = discord.Embed(
-            title=f"📜 TICKET TRANSCRIPT LOG — {interaction.channel.name}",
-            description=f"Transcript for the ticket channel **{interaction.channel.name}** is attached below in multiple parts.",
-            color=discord.Color.red()
-        )
-        metadata_embed.add_field(name="Ticket Opener", value=ticket_opener.mention, inline=True)
-        metadata_embed.add_field(name="Ticket Closer", value=interaction.user.mention, inline=True)
-        metadata_embed.add_field(name="\u200b", value="\u200b", inline=True)
-        
-        metadata_embed.add_field(name="Time Opened", value=f"{open_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
-        metadata_embed.add_field(name="Time Closed", value=f"{close_time.strftime('%Y-%m-%d %H:%M:%S UTC')}", inline=False)
-        metadata_embed.add_field(name="Ticket Duration", value=duration_str, inline=False)
-
-        await log_channel.send(embed=metadata_embed)
-
-        for i, part in enumerate(transcript_parts):
-            embed = discord.Embed(
-                title=f"📄 Transcript Data — Part {i+1}",
-                description=part,
-                color=discord.Color.blurple()
-            )
-            await log_channel.send(embed=embed)
-        
-        await interaction.channel.delete()
+        # Call shared closing logic
+        await perform_ticket_closure(interaction.channel, interaction.user)
+        # Note: The channel is deleted inside perform_ticket_closure, completing the process.
 
 
 # =============================
@@ -534,13 +546,14 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- /force_close ---
+# --- /force_close (CRITICAL FIX APPLIED) ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
 @app_commands.describe(channel="Optional: Specify a ticket channel to close.")
 async def force_close(interaction: discord.Interaction, channel: discord.TextChannel = None): 
 
+    # Determine the target channel
     target_channel = channel or interaction.channel
 
     if not isinstance(target_channel, discord.TextChannel) or not target_channel.name.startswith("ticket-"):
@@ -551,26 +564,13 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
-    class ForceCloseInteraction:
-        def __init__(self, interaction, channel):
-            self.user = interaction.user
-            self.guild = interaction.guild
-            self.response = interaction.followup
-            self.followup = interaction.followup
-            self.channel = channel
-            
-        async def edit_original_response(self, content):
-            await interaction.edit_original_response(content=content)
-
-        async def send_message(self, *args, **kwargs):
-            await interaction.followup.send(*args, **kwargs)
-
     await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
 
-    view = CloseTicketView()
-    await view.close_ticket(ForceCloseInteraction(interaction, target_channel), None) 
+    # Call the robust closure logic directly
+    await perform_ticket_closure(target_channel, interaction.user) 
     
     try:
+        # Final confirmation
         await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
     except:
         pass
