@@ -18,6 +18,14 @@ try:
     GUILD_ID = int(os.getenv("GUILD_ID"))
     TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
     VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
+    TICKET_PANEL_CHANNEL_ID = os.getenv("TICKET_PANEL_CHANNEL_ID")
+    if TICKET_PANEL_CHANNEL_ID:
+        TICKET_PANEL_CHANNEL_ID = int(TICKET_PANEL_CHANNEL_ID)
+
+    INSTRUCTIONS_CHANNEL_ID = os.getenv("INSTRUCTIONS_CHANNEL_ID")
+    if INSTRUCTIONS_CHANNEL_ID:
+        INSTRUCTIONS_CHANNEL_ID = int(INSTRUCTIONS_CHANNEL_ID)
+    
 except (TypeError, ValueError) as e:
     raise ValueError(f"Missing or invalid required environment variable ID: {e}")
 
@@ -35,7 +43,6 @@ def load_apps():
         with open("apps.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        # Define a default structure if file is missing (adjust if needed)
         default_apps = {
             "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
             "youtube": "https://example.com/youtube-download",
@@ -74,7 +81,6 @@ def run_flask():
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Cooldowns stores timezone-aware datetime objects
 cooldowns = {} 
 
 # ---------------------------
@@ -105,14 +111,102 @@ async def create_transcript(channel: discord.TextChannel) -> tuple[list[str], li
         
     return transcript_chunks, messages
 
+# ---------------------------
+# CORE TICKET LOGIC (Shared by /ticket and Button)
+# ---------------------------
+async def create_new_ticket(interaction: discord.Interaction):
+    """Handles the shared logic of checking cooldown, creating channel, and sending welcome message."""
+    
+    user = interaction.user
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    if user.id in cooldowns and cooldowns[user.id] > now:
+        remaining = cooldowns[user.id] - now
+        time_left_str = str(remaining).split('.')[0] 
+        
+        return await interaction.response.send_message(
+            embed=discord.Embed(
+                title="⏳ Cooldown Active - Please Wait",
+                description=f"You recently opened a ticket. You can open your next ticket in:\n"
+                            f"**`{time_left_str}`**",
+                color=discord.Color.orange()
+            ),
+            ephemeral=True
+        )
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    cooldowns[user.id] = now + datetime.timedelta(hours=48)
+
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+    }
+
+    channel_name = f"ticket-{interaction.user.id}"
+
+    channel = await interaction.guild.create_text_channel(
+        channel_name,
+        overwrites=overwrites
+    )
+
+    # --- ENHANCED STYLISH WELCOME MESSAGE ---
+    embed = discord.Embed(
+        title="🌟 Welcome to the Premium Access Ticket Center! 🚀",
+        description=f"Hello {user.mention}! Thank you for choosing our services. We are here to provide you with quick access to premium content. \n\n"
+                    "**Please read the information below before proceeding.**",
+        color=discord.Color.from_rgb(50, 200, 255)
+    )
+
+    if INSTRUCTIONS_CHANNEL_ID:
+        embed.add_field(
+            name="🔴 IMPORTANT: READ BEFORE PROCEEDING",
+            value=f"Before selecting an app, you **MUST** go to {bot.get_channel(INSTRUCTIONS_CHANNEL_ID).mention} and follow the initial setup steps. Failure to comply will result in denial.",
+            inline=False
+        )
+    
+    embed.add_field(
+        name="1️⃣ Server Benefits & Guarantee",
+        value="We specialize in providing verified links to the best premium apps. All our links are regularly checked and guaranteed to work upon successful verification.",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="2️⃣ How to Get Your App Link",
+        value="1. **Select the app** you want from the dropdown menu below.\n"
+              "2. Follow the verification steps (usually subscribing and sending a screenshot).\n"
+              "3. Wait for Admin approval to receive your link.",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="3️⃣ Rules & Support",
+        value="* **Be Polite:** Respect the staff members.\n"
+              "* **No Spamming:** Only submit the required screenshot.\n"
+              "* **Patience:** Verification takes time. Do not ping admins excessively.",
+        inline=False
+    )
+    
+    embed.set_footer(text="Your satisfaction is our priority! Select an app below to get started.")
+    # --- END ENHANCED WELCOME MESSAGE ---
+
+
+    await channel.send(f"Welcome {user.mention}! Please select an application below.", embed=embed, view=AppSelect(interaction.user))
+
+    await interaction.followup.send(
+        f"✅ Ticket created successfully! Head over to {channel.mention} to continue.",
+        ephemeral=True
+    )
+
 
 # =============================
-# APP SELECT VIEW
+# APP SELECT VIEW (MORE STYLISH)
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
         super().__init__(
-            placeholder="✨ Select the Premium App you need...", 
+            # Enhanced Placeholder text
+            placeholder="🛒 Tap here to select your desired Premium App...", 
             min_values=1, 
             max_values=1, 
             options=options,
@@ -157,20 +251,22 @@ class AppSelect(View):
         for app_key in current_apps.keys():
             app_name_display = app_key.title()
             
+            # Using custom color-coded emojis for stylish options
             emoji = {
-                "spotify": "🎧", 
-                "youtube": "▶️", 
-                "kinemaster": "🎬", 
-                "hotstar": "📺",
+                "spotify": "🟢", # Green for music
+                "youtube": "🔴", # Red for video
+                "kinemaster": "🟡", # Yellow for editing
+                "hotstar": "🔵", # Blue for streaming
                 "truecaller": "📞", 
                 "castle": "🏰"
-            }.get(app_key, "💎")
+            }.get(app_key, "⚪")
             
             options.append(
                 discord.SelectOption(
-                    label=f"🌟 {app_name_display} Premium Access", 
+                    label=f"{app_name_display} — Instant Access", 
                     value=app_key,
-                    description=f"Instantly request the link for {app_name_display} access.",
+                    # Descriptive detail is key
+                    description=f"Secure your link for {app_name_display} Premium features.",
                     emoji=emoji
                 )
             )
@@ -182,6 +278,22 @@ class AppSelect(View):
                 discord.ui.Button(label="No Apps Available Yet", style=discord.ButtonStyle.grey, disabled=True)
             )
 
+
+# =============================
+# CREATE TICKET BUTTON VIEW
+# =============================
+class TicketPanelButton(View):
+    def __init__(self):
+        super().__init__(timeout=None) 
+
+    @discord.ui.button(
+        label="Create New Ticket",
+        style=discord.ButtonStyle.blurple,
+        emoji="📩",
+        custom_id="persistent_create_ticket_button" 
+    )
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await create_new_ticket(interaction)
 
 # =============================
 # CLOSE TICKET VIEW
@@ -199,7 +311,6 @@ class CloseTicketView(View):
         
         await interaction.response.send_message("Initiating 5-second countdown to close ticket... ⏳", ephemeral=True)
         
-        # --- COUNTDOWN LOGIC ---
         for i in range(5, 0, -1):
             content = f"Ticket closing in **{i}** seconds... 🗑️"
             await interaction.edit_original_response(content=content)
@@ -207,14 +318,10 @@ class CloseTicketView(View):
 
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
-        # --- CLOSING AND LOGIC ---
-        
         log_channel = bot.get_channel(TICKET_LOG_CHANNEL_ID)
         
-        # Collect Transcript and Message Data
         transcript_parts, messages = await create_transcript(interaction.channel)
 
-        # Get Ticket Metadata
         ticket_opener = messages[0].author if messages else interaction.user
         open_time = messages[0].created_at if messages else datetime.datetime.now(datetime.timezone.utc)
         close_time = datetime.datetime.now(datetime.timezone.utc)
@@ -222,7 +329,6 @@ class CloseTicketView(View):
         
         duration_str = str(duration).split('.')[0] 
 
-        # Log Metadata (Single Embed)
         metadata_embed = discord.Embed(
             title=f"📜 TICKET TRANSCRIPT LOG — {interaction.channel.name}",
             description=f"Transcript for the ticket channel **{interaction.channel.name}** is attached below in multiple parts.",
@@ -238,7 +344,6 @@ class CloseTicketView(View):
 
         await log_channel.send(embed=metadata_embed)
 
-        # Log Transcript Parts
         for i, part in enumerate(transcript_parts):
             embed = discord.Embed(
                 title=f"📄 Transcript Data — Part {i+1}",
@@ -247,7 +352,6 @@ class CloseTicketView(View):
             )
             await log_channel.send(embed=embed)
         
-        # Delete Channel
         await interaction.channel.delete()
 
 
@@ -437,7 +541,6 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
 @app_commands.describe(channel="Optional: Specify a ticket channel to close.")
 async def force_close(interaction: discord.Interaction, channel: discord.TextChannel = None): 
 
-    # Determine the target channel
     target_channel = channel or interaction.channel
 
     if not isinstance(target_channel, discord.TextChannel) or not target_channel.name.startswith("ticket-"):
@@ -448,7 +551,6 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
-    # Custom class to pass correct context to the closing view
     class ForceCloseInteraction:
         def __init__(self, interaction, channel):
             self.user = interaction.user
@@ -558,53 +660,8 @@ async def view_tickets(interaction: discord.Interaction):
 @bot.tree.command(name="ticket", description="🎟️ Create a support ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
-
-    user = interaction.user
-    now = datetime.datetime.now(datetime.timezone.utc)
-
-    if user.id in cooldowns and cooldowns[user.id] > now:
-        remaining = cooldowns[user.id] - now
-        
-        time_left_str = str(remaining).split('.')[0] 
-        
-        return await interaction.response.send_message(
-            embed=discord.Embed(
-                title="⏳ Cooldown Active - Please Wait",
-                description=f"You recently opened a ticket. You can open your next ticket in:\n"
-                            f"**`{time_left_str}`**",
-                color=discord.Color.orange()
-            ),
-            ephemeral=True
-        )
-    
-    await interaction.response.defer(ephemeral=True, thinking=True)
-
-    cooldowns[user.id] = now + datetime.timedelta(hours=48)
-
-    overwrites = {
-        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
-    }
-
-    channel_name = f"ticket-{interaction.user.id}"
-
-    channel = await interaction.guild.create_text_channel(
-        channel_name,
-        overwrites=overwrites
-    )
-
-    embed = discord.Embed(
-        title="🎫 Welcome to your Ticket!",
-        description="👋 Please select the application you need assistance with from the dropdown menu below.",
-        color=discord.Color.blurple()
-    )
-
-    await channel.send(f"Welcome {user.mention}!", embed=embed, view=AppSelect(interaction.user))
-
-    await interaction.followup.send(
-        f"✅ Ticket created successfully! Head over to {channel.mention} to continue.",
-        ephemeral=True
-    )
+    # Call the shared ticket creation logic
+    await create_new_ticket(interaction)
 
 
 # =============================
@@ -664,6 +721,45 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
+# ---------------------------
+# STARTUP FUNCTIONS
+# ---------------------------
+
+async def setup_ticket_panel():
+    """Finds or sends the persistent ticket creation button."""
+    if not TICKET_PANEL_CHANNEL_ID:
+        print("WARNING: TICKET_PANEL_CHANNEL_ID is not set. Skipping ticket panel setup.")
+        return
+
+    channel = bot.get_channel(TICKET_PANEL_CHANNEL_ID)
+    if not channel:
+        print(f"ERROR: Could not find ticket panel channel with ID {TICKET_PANEL_CHANNEL_ID}")
+        return
+
+    panel_embed = discord.Embed(
+        title="📩 Need a Premium App Link? Create a Ticket!",
+        description="Click the button below to start the verification process and receive your requested premium app link. This will open a private channel for you.",
+        color=discord.Color.dark_teal()
+    )
+    
+    try:
+        panel_message_found = False
+        async for message in channel.history(limit=5):
+            if message.author == bot.user and message.components:
+                if message.components[0].children[0].custom_id == "persistent_create_ticket_button":
+                    print("Found existing ticket panel message.")
+                    panel_message_found = True
+                    break
+        
+        if not panel_message_found:
+            await channel.send(embed=panel_embed, view=TicketPanelButton())
+            print("Sent new persistent ticket panel.")
+
+    except discord.Forbidden:
+        print("ERROR: Missing permissions to read or send messages in the ticket panel channel.")
+    except Exception as e:
+        print(f"An unexpected error occurred during panel setup: {e}")
+
 
 # =============================
 # ON READY
@@ -674,6 +770,10 @@ async def on_ready():
 
     # Register persistent views
     bot.add_view(CloseTicketView())
+    bot.add_view(TicketPanelButton())
+    
+    # Run panel setup after commands are synced
+    await setup_ticket_panel()
 
     print(f"🟢 Bot logged in successfully as {bot.user}")
 
