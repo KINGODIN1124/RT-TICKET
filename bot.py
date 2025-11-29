@@ -785,10 +785,11 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ---------------------------
-# STARTUP FUNCTIONS
+# STARTUP FUNCTIONS (CORRECTED)
 # ---------------------------
 
-async def setup_ticket_panel():
+# FIX: Add the optional argument with a default value
+async def setup_ticket_panel(force_resend: bool = False):
     """Finds or sends the persistent ticket creation button."""
     if not TICKET_PANEL_CHANNEL_ID:
         print("WARNING: TICKET_PANEL_CHANNEL_ID is not set. Skipping ticket panel setup.")
@@ -807,14 +808,25 @@ async def setup_ticket_panel():
     
     try:
         panel_message_found = False
+        panel_message = None # Store message object for potential deletion
+
+        # Find the existing panel message
         async for message in channel.history(limit=5):
             if message.author == bot.user and message.components:
                 if message.components[0].children[0].custom_id == "persistent_create_ticket_button":
-                    print("Found existing ticket panel message.")
                     panel_message_found = True
+                    panel_message = message
                     break
         
+        # CRITICAL REFRESH LOGIC
+        if panel_message_found and force_resend:
+            # If forced to resend, delete the old message
+            await panel_message.delete()
+            panel_message_found = False
+            print("Deleted old ticket panel message due to /refresh_panel command.")
+
         if not panel_message_found:
+            # Send a new one if not found or if the old one was just deleted
             await channel.send(embed=panel_embed, view=TicketPanelButton())
             print("Sent new persistent ticket panel.")
 
@@ -822,7 +834,6 @@ async def setup_ticket_panel():
         print("ERROR: Missing permissions to read or send messages in the ticket panel channel.")
     except Exception as e:
         print(f"An unexpected error occurred during panel setup: {e}")
-
 
 # =============================
 # ON READY
