@@ -623,6 +623,22 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
     except:
         pass
 
+# --- /refresh_panel (NEW ADMIN COMMAND) ---
+@bot.tree.command(name="refresh_panel", description="🔄 Deletes and resends the ticket creation panel.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def refresh_panel(interaction: discord.Interaction):
+    
+    if not TICKET_PANEL_CHANNEL_ID:
+        return await interaction.response.send_message("❌ Error: TICKET_PANEL_CHANNEL_ID is not configured.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    # Call setup_ticket_panel with force_resend=True
+    await setup_ticket_panel(force_resend=True)
+    
+    await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
+    
 
 # --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket")
