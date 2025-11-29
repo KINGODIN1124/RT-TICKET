@@ -13,6 +13,7 @@ from threading import Thread
 # ---------------------------
 # Environment Variables
 # ---------------------------
+# NOTE: These variables are read inside the functions or main block
 TOKEN = os.getenv("DISCORD_TOKEN")
 try:
     GUILD_ID = int(os.getenv("GUILD_ID"))
@@ -47,9 +48,11 @@ def load_apps():
     except FileNotFoundError:
         default_apps = {
             "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
+            "youtube": "https://example.com/youtube-download",
             "kinemaster": "https://link-center.net/1438550/dP4XtgqcsuU1",
             "hotstar": "https://link-target.net/1438550/WEPSuAD5cl5A",
-            "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu"
+            "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu",
+            "castle": "https://example.com/castle-download"
         }
         print("Warning: apps.json not found. Creating file with default data.")
         with open("apps.json", "w") as f:
@@ -65,7 +68,6 @@ def save_apps(apps):
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to write to apps.json. Check hosting permissions: {e}")
 
-apps = load_apps()
 
 # ---------------------------
 # GLOBAL HELPER: Emoji Assignment
@@ -152,7 +154,7 @@ async def create_transcript(channel: discord.TextChannel) -> tuple[list[str], li
     return transcript_chunks, messages
 
 # ---------------------------
-# CORE TICKET CLOSURE LOGIC (Shared by CloseTicketView and /force_close)
+# CORE TICKET CLOSURE LOGIC
 # ---------------------------
 async def perform_ticket_closure(channel: discord.TextChannel, closer: discord.User):
     """Performs logging and final deletion of the channel."""
@@ -491,7 +493,6 @@ class VerificationView(View):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def add_app(interaction: discord.Interaction, app_name: str, app_link: str):
     
-    # Defer interaction due to file I/O
     await interaction.response.defer(ephemeral=True)
     
     app_key = app_name.lower()
@@ -508,34 +509,35 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-
-# --- /remove_cooldown --- (FIXED DEFERRAL)
-@bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
+# --- /remove_app ---
+@bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
-async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
-
-    # CRITICAL FIX: Acknowledge the interaction immediately
-    await interaction.response.defer(ephemeral=True)
-
-    if user.id in cooldowns:
-        del cooldowns[user.id]
-
-        embed = discord.Embed(
-            title="✅ Cooldown Removed",
-            description=f"The 48-hour cooldown for {user.mention} has been manually cleared. They can now create a new ticket immediately. 🔓",
-            color=discord.Color.green()
-        )
-    else:
-        embed = discord.Embed(
-            title="ℹ️ No Active Cooldown Found",
-            description=f"User {user.mention} currently has no ticket cooldown active.",
-            color=discord.Color.blue()
-        )
+async def remove_app(interaction: discord.Interaction, app_name: str):
     
-    # Use followup.send() after deferring
-    await interaction.followup.send(embed=embed, ephemeral=True) 
-
+    await interaction.response.defer(ephemeral=True)
+    
+    app_key = app_name.lower()
+    
+    current_apps = load_apps()
+    
+    if app_key not in current_apps:
+        embed = discord.Embed(
+            title="❌ App Not Found",
+            description=f"App **{app_name.title()}** not found in the list.",
+            color=discord.Color.red()
+        )
+        return await interaction.followup.send(embed=embed, ephemeral=True)
+        
+    del current_apps[app_key]
+    save_apps(current_apps)
+    
+    embed = discord.Embed(
+        title="🗑️ App Permanently Removed",
+        description=f"The application **{app_name.title()}** has been successfully removed from the database and will no longer appear in the ticket dropdown.",
+        color=discord.Color.red()
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # --- /view_apps ---
 @bot.tree.command(name="view_apps", description="📋 View all applications and their links in the database")
@@ -543,7 +545,6 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
 @app_commands.checks.has_permissions(manage_guild=True)
 async def view_apps(interaction: discord.Interaction):
     
-    # Defer interaction due to file I/O
     await interaction.response.defer(ephemeral=True)
     
     current_apps = load_apps()
@@ -576,6 +577,8 @@ async def view_apps(interaction: discord.Interaction):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
 
+    await interaction.response.defer(ephemeral=True)
+
     if user.id in cooldowns:
         del cooldowns[user.id]
 
@@ -591,7 +594,7 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
             color=discord.Color.blue()
         )
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # --- /force_close ---
@@ -613,11 +616,9 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
     
     await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
 
-    # Call the robust closure logic directly
     await perform_ticket_closure(target_channel, interaction.user) 
     
     try:
-        # Final confirmation
         await interaction.followup.send(f"✅ Force close successful! {target_channel.name} is deleted.", ephemeral=True)
     except:
         pass
@@ -750,7 +751,7 @@ async def on_message(message):
             await message.channel.send(
                 embed=discord.Embed(
                     title="✅ Upload Successful! 🎉",
-                    description="Thank camera you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
+                    description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
                     color=discord.Color.blue()
                 )
             )
@@ -825,7 +826,12 @@ async def on_ready():
 
 
 # =============================
-# RUN BOT
+# RUN BOT (Protected Initialization)
 # =============================
-Thread(target=run_flask).start()
-bot.run(TOKEN)
+if __name__ == "__main__":
+    
+    # 1. Start Flask thread (only once)
+    Thread(target=run_flask).start()
+    
+    # 2. Start the Discord client (only once)
+    bot.run(TOKEN)
