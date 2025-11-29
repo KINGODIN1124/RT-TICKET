@@ -58,10 +58,56 @@ def load_apps():
 
 def save_apps(apps):
     """Saves the app list to apps.json."""
-    with open("apps.json", "w") as f:
-        json.dump(apps, f, indent=4)
+    try:
+        with open("apps.json", "w") as f:
+            json.dump(apps, f, indent=4)
+        print("DEBUG: Successfully saved apps.json.")
+    except Exception as e:
+        print(f"CRITICAL ERROR: Failed to write to apps.json. Check hosting permissions: {e}")
 
 apps = load_apps()
+
+# ---------------------------
+# GLOBAL HELPER: Emoji Assignment
+# ---------------------------
+def get_app_emoji(app_key: str) -> str:
+    """Assigns an appropriate emoji based on the app key (lowercase)."""
+    
+    app_key = app_key.lower()
+    
+    # Specific Mappings (for guaranteed apps)
+    emoji_map = {
+        "spotify": "🎶", 
+        "youtube": "📺", 
+        "kinemaster": "✍️", 
+        "hotstar": "⭐",
+        "truecaller": "📞", 
+        "castle": "🏰",
+        
+        # Generic/Category Mappings (for new apps)
+        "netflix": "🎬",
+        "hulu": "🍿",
+        "vpn": "🛡️",
+        "prime": "👑",
+        "editor": "✏️",
+        "music": "🎵",
+        "streaming": "📡",
+        "photo": "📸",
+        "file": "📁",
+    }
+    
+    # Check for exact matches or matches within the name
+    if app_key in emoji_map:
+        return emoji_map[app_key]
+    
+    # Check if a common category keyword exists in the app name
+    for keyword, emoji in emoji_map.items():
+        if keyword in app_key:
+            return emoji
+
+    # Default Fallback Emoji
+    return "✨"
+
 
 # ---------------------------
 # Flask Keepalive Server
@@ -245,7 +291,7 @@ async def create_new_ticket(interaction: discord.Interaction):
 
 
 # =============================
-# APP SELECT VIEW (AESTHETIC UPDATE)
+# APP SELECT VIEW
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
@@ -262,15 +308,8 @@ class AppDropdown(Select):
         app_key = self.values[0]
         app_name_display = app_key.title()
         
-        # Aesthetic update: Emojis for the title embed
-        app_emoji = {
-            "spotify": "🎶", 
-            "youtube": "📺", 
-            "kinemaster": "✍️", 
-            "hotstar": "⭐",
-            "truecaller": "📞", 
-            "castle": "🏰"
-        }.get(app_key, "💎")
+        # Use centralized emoji function
+        app_emoji = get_app_emoji(app_key)
 
         embed = discord.Embed(
             title=f"{app_emoji} Verification Process for {app_name_display} - 3 Steps to Success!",
@@ -296,15 +335,8 @@ class AppSelect(View):
         for app_key in current_apps.keys():
             app_name_display = app_key.title()
             
-            # Aesthetic update: Emojis for the dropdown options
-            emoji = {
-                "spotify": "🎶", # Replaced circle color
-                "youtube": "📺", # Replaced circle color
-                "kinemaster": "✍️", # Replaced circle color
-                "hotstar": "⭐", # Replaced circle color
-                "truecaller": "📞", 
-                "castle": "🏰"
-            }.get(app_key, "⚪")
+            # Use centralized emoji function
+            emoji = get_app_emoji(app_key)
             
             options.append(
                 discord.SelectOption(
@@ -362,9 +394,7 @@ class CloseTicketView(View):
 
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
-        # Call shared closing logic
-        await perform_ticket_closure(interaction.channel, interaction.user)
-        # Note: The channel is deleted inside perform_ticket_closure, completing the process.
+        await perform_ticket_closure(interaction.channel, interaction.user) 
 
 
 # =============================
@@ -468,7 +498,6 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
     )
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
 # --- /remove_app ---
 @bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
@@ -546,14 +575,13 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# --- /force_close (CRITICAL FIX APPLIED) ---
+# --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_channels=True)
 @app_commands.describe(channel="Optional: Specify a ticket channel to close.")
 async def force_close(interaction: discord.Interaction, channel: discord.TextChannel = None): 
 
-    # Determine the target channel
     target_channel = channel or interaction.channel
 
     if not isinstance(target_channel, discord.TextChannel) or not target_channel.name.startswith("ticket-"):
@@ -564,9 +592,7 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
-    await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
-
-    # Call the robust closure logic directly
+    # Perform closure logic directly using the channel object and the user
     await perform_ticket_closure(target_channel, interaction.user) 
     
     try:
