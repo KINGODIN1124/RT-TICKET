@@ -509,36 +509,33 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-# --- /remove_app ---
-@bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
+# --- /remove_cooldown --- (FIXED DEFERRAL)
+@bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
-async def remove_app(interaction: discord.Interaction, app_name: str):
-    
-    # Defer interaction due to file I/O
+async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
+
+    # CRITICAL FIX: Acknowledge the interaction immediately
     await interaction.response.defer(ephemeral=True)
-    
-    app_key = app_name.lower()
-    
-    current_apps = load_apps()
-    
-    if app_key not in current_apps:
+
+    if user.id in cooldowns:
+        del cooldowns[user.id]
+
         embed = discord.Embed(
-            title="❌ App Not Found",
-            description=f"App **{app_name.title()}** not found in the list.",
-            color=discord.Color.red()
+            title="✅ Cooldown Removed",
+            description=f"The 48-hour cooldown for {user.mention} has been manually cleared. They can now create a new ticket immediately. 🔓",
+            color=discord.Color.green()
         )
-        return await interaction.followup.send(embed=embed, ephemeral=True)
-        
-    del current_apps[app_key]
-    save_apps(current_apps)
+    else:
+        embed = discord.Embed(
+            title="ℹ️ No Active Cooldown Found",
+            description=f"User {user.mention} currently has no ticket cooldown active.",
+            color=discord.Color.blue()
+        )
     
-    embed = discord.Embed(
-        title="🗑️ App Permanently Removed",
-        description=f"The application **{app_name.title()}** has been successfully removed from the database and will no longer appear in the ticket dropdown.",
-        color=discord.Color.red()
-    )
-    await interaction.followup.send(embed=embed, ephemeral=True)
+    # Use followup.send() after deferring
+    await interaction.followup.send(embed=embed, ephemeral=True) 
+
 
 # --- /view_apps ---
 @bot.tree.command(name="view_apps", description="📋 View all applications and their links in the database")
