@@ -18,6 +18,8 @@ try:
     GUILD_ID = int(os.getenv("GUILD_ID"))
     TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
     VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
+    
+    # Optional Channels
     TICKET_PANEL_CHANNEL_ID = os.getenv("TICKET_PANEL_CHANNEL_ID")
     if TICKET_PANEL_CHANNEL_ID:
         TICKET_PANEL_CHANNEL_ID = int(TICKET_PANEL_CHANNEL_ID)
@@ -45,13 +47,11 @@ def load_apps():
     except FileNotFoundError:
         default_apps = {
             "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
-            "youtube": "https://example.com/youtube-download",
             "kinemaster": "https://link-center.net/1438550/dP4XtgqcsuU1",
             "hotstar": "https://link-target.net/1438550/WEPSuAD5cl5A",
-            "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu",
-            "castle": "https://example.com/castle-download"
+            "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu"
         }
-        print("Warning: apps.json not found. Using default data and creating file.")
+        print("Warning: apps.json not found. Creating file with default data.")
         with open("apps.json", "w") as f:
             json.dump(default_apps, f, indent=4)
         return default_apps
@@ -75,7 +75,6 @@ def get_app_emoji(app_key: str) -> str:
     
     app_key = app_key.lower()
     
-    # Specific Mappings (for guaranteed apps)
     emoji_map = {
         "spotify": "🎶", 
         "youtube": "📺", 
@@ -83,8 +82,6 @@ def get_app_emoji(app_key: str) -> str:
         "hotstar": "⭐",
         "truecaller": "📞", 
         "castle": "🏰",
-        
-        # Generic/Category Mappings (for new apps)
         "netflix": "🎬",
         "hulu": "🍿",
         "vpn": "🛡️",
@@ -96,16 +93,13 @@ def get_app_emoji(app_key: str) -> str:
         "file": "📁",
     }
     
-    # Check for exact matches or matches within the name
     if app_key in emoji_map:
         return emoji_map[app_key]
     
-    # Check if a common category keyword exists in the app name
     for keyword, emoji in emoji_map.items():
         if keyword in app_key:
             return emoji
 
-    # Default Fallback Emoji
     return "✨"
 
 
@@ -308,7 +302,6 @@ class AppDropdown(Select):
         app_key = self.values[0]
         app_name_display = app_key.title()
         
-        # Use centralized emoji function
         app_emoji = get_app_emoji(app_key)
 
         embed = discord.Embed(
@@ -335,7 +328,6 @@ class AppSelect(View):
         for app_key in current_apps.keys():
             app_name_display = app_key.title()
             
-            # Use centralized emoji function
             emoji = get_app_emoji(app_key)
             
             options.append(
@@ -369,7 +361,21 @@ class TicketPanelButton(View):
         custom_id="persistent_create_ticket_button" 
     )
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await create_new_ticket(interaction)
+        try:
+            await create_new_ticket(interaction)
+        except discord.errors.Forbidden:
+            await interaction.response.send_message(
+                "❌ Error: I lack necessary permissions (e.g., Manage Channels or Send Messages) to create your ticket.", 
+                ephemeral=True
+            )
+        except Exception as e:
+            print(f"CRITICAL ERROR in Ticket Creation Button: {e}")
+            
+            if not interaction.response.is_done():
+                 await interaction.response.send_message(
+                    "❌ An unexpected error occurred while processing your ticket request. Please notify an administrator.", 
+                    ephemeral=True
+                )
 
 # =============================
 # CLOSE TICKET VIEW
@@ -394,6 +400,7 @@ class CloseTicketView(View):
 
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
+        # Call shared closing logic
         await perform_ticket_closure(interaction.channel, interaction.user) 
 
 
@@ -484,6 +491,9 @@ class VerificationView(View):
 @app_commands.checks.has_permissions(manage_guild=True)
 async def add_app(interaction: discord.Interaction, app_name: str, app_link: str):
     
+    # Defer interaction due to file I/O
+    await interaction.response.defer(ephemeral=True)
+    
     app_key = app_name.lower()
     
     current_apps = load_apps()
@@ -496,7 +506,8 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
                     f"🔗 **Direct Link:** [Click Here]({app_link})",
         color=discord.Color.green()
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # --- /remove_app ---
 @bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
@@ -504,12 +515,20 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_app(interaction: discord.Interaction, app_name: str):
     
+    # Defer interaction due to file I/O
+    await interaction.response.defer(ephemeral=True)
+    
     app_key = app_name.lower()
     
     current_apps = load_apps()
     
     if app_key not in current_apps:
-        return await interaction.response.send_message(f"❌ App **{app_name.title()}** not found in the list. Please check the spelling.", ephemeral=True)
+        embed = discord.Embed(
+            title="❌ App Not Found",
+            description=f"App **{app_name.title()}** not found in the list.",
+            color=discord.Color.red()
+        )
+        return await interaction.followup.send(embed=embed, ephemeral=True)
         
     del current_apps[app_key]
     save_apps(current_apps)
@@ -519,13 +538,16 @@ async def remove_app(interaction: discord.Interaction, app_name: str):
         description=f"The application **{app_name.title()}** has been successfully removed from the database and will no longer appear in the ticket dropdown.",
         color=discord.Color.red()
     )
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 # --- /view_apps ---
 @bot.tree.command(name="view_apps", description="📋 View all applications and their links in the database")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def view_apps(interaction: discord.Interaction):
+    
+    # Defer interaction due to file I/O
+    await interaction.response.defer(ephemeral=True)
     
     current_apps = load_apps()
     
@@ -535,7 +557,7 @@ async def view_apps(interaction: discord.Interaction):
             description="The `apps.json` file is empty. Use `/add_app` to populate the list.",
             color=discord.Color.orange()
         )
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
+        return await interaction.followup.send(embed=embed, ephemeral=True)
 
     app_list_str = ""
     for app_key, link in current_apps.items():
@@ -548,7 +570,7 @@ async def view_apps(interaction: discord.Interaction):
     )
     embed.add_field(name="App Name & Link", value=app_list_str, inline=False)
     
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 # --- /remove_cooldown ---
@@ -592,7 +614,9 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     
-    # Perform closure logic directly using the channel object and the user
+    await interaction.edit_original_response(content=f"Preparing to force close {target_channel.mention}...")
+
+    # Call the robust closure logic directly
     await perform_ticket_closure(target_channel, interaction.user) 
     
     try:
@@ -686,7 +710,6 @@ async def view_tickets(interaction: discord.Interaction):
 @bot.tree.command(name="ticket", description="🎟️ Create a support ticket")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
-    # Call the shared ticket creation logic
     await create_new_ticket(interaction)
 
 
@@ -730,7 +753,7 @@ async def on_message(message):
             await message.channel.send(
                 embed=discord.Embed(
                     title="✅ Upload Successful! 🎉",
-                    description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
+                    description="Thank camera you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
                     color=discord.Color.blue()
                 )
             )
