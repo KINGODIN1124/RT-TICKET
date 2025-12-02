@@ -11,9 +11,14 @@ from flask import Flask
 from threading import Thread
 
 # ---------------------------
+# GLOBAL CONFIGURATION
+# ---------------------------
+# Updated V2 list includes bilibili, hotstar, and vpn (all lowercase)
+V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
+
+# ---------------------------
 # Environment Variables
 # ---------------------------
-# NOTE: These variables are read inside the functions or main block
 TOKEN = os.getenv("DISCORD_TOKEN")
 try:
     GUILD_ID = int(os.getenv("GUILD_ID"))
@@ -41,18 +46,20 @@ if not YOUTUBE_CHANNEL_URL or not TOKEN:
 # Load / Save Apps (JSON Database)
 # ---------------------------
 def load_apps():
-    """Loads the app list from apps.json."""
+    """Loads the app list (final links) from apps.json."""
     try:
         with open("apps.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
+        # Updated default apps to include new V2 apps
         default_apps = {
             "spotify": "https://link-target.net/1438550/4r4pWdwOV2gK",
             "youtube": "https://example.com/youtube-download",
             "kinemaster": "https://link-center.net/1438550/dP4XtgqcsuU1",
-            "hotstar": "https://link-target.net/1438550/WEPSuAD5cl5A",
+            "hotstar": "https://final-link.com/hotstar-premium", # Added
+            "vpn": "https://final-link.com/vpn-premium", # Added
             "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu",
-            "castle": "https://example.com/castle-download"
+            "bilibili": "https://final-link.com/bilibili-premium", 
         }
         print("Warning: apps.json not found. Creating file with default data.")
         with open("apps.json", "w") as f:
@@ -70,6 +77,29 @@ def save_apps(apps):
 
 
 # ---------------------------
+# Load / Save V2 Links (New Data Source)
+# ---------------------------
+def load_v2_links():
+    """Loads the V2 website links for the second verification step."""
+    try:
+        with open("v2_links.json", "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print("Warning: v2_links.json not found. Creating file with default data.")
+        # Updated default V2 links to include new V2 apps
+        default_v2 = {
+            "bilibili": "https://verification2-djde.onrender.com/bilibili", 
+            "hotstar": "https://verification2-djde.onrender.com/hotstar", 
+            "vpn": "https://verification2-djde.onrender.com/vpn", 
+        }
+        with open("v2_links.json", "w") as f:
+            json.dump(default_v2, f, indent=4)
+        return default_v2
+
+v2_links = load_v2_links()
+# ---------------------------
+
+# ---------------------------
 # GLOBAL HELPER: Emoji Assignment
 # ---------------------------
 def get_app_emoji(app_key: str) -> str:
@@ -78,6 +108,7 @@ def get_app_emoji(app_key: str) -> str:
     app_key = app_key.lower()
     
     emoji_map = {
+        "bilibili": "🅱️", 
         "spotify": "🎶", 
         "youtube": "📺", 
         "kinemaster": "✍️", 
@@ -223,7 +254,8 @@ async def create_new_ticket(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    cooldowns[user.id] = now + datetime.timedelta(hours=48)
+    # --- COOLDOWN UPDATED: 168 hours (7 days) ---
+    cooldowns[user.id] = now + datetime.timedelta(hours=168)
 
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -258,11 +290,15 @@ async def create_new_ticket(interaction: discord.Interaction):
         inline=False
     )
     
+    # MODIFIED FIELD TO REFLECT CONDITIONAL 2-STEP PROCESS
+    two_step_message = "Depending on the app selected, you will either receive your link immediately after verification OR be directed to a short second security step."
+    
     embed.add_field(
-        name="2️⃣ How to Get Your App Link",
-        value="1. **Select the app** you want from the dropdown menu below.\n"
-              "2. Follow the verification steps (usually subscribing and sending a screenshot).\n"
-              "3. Wait for Admin approval to receive your link.",
+        name="2️⃣ How to Get Your App Link (1 or 2 Steps)",
+        value=f"1. **Select the app** you want from the dropdown menu below.\n"
+              f"2. Follow the verification steps (subscribing/screenshotting).\n"
+              f"3. **Complete the final step** (1-step apps receive link now, 2-step apps require a short final security check).\n"
+              f"**{two_step_message}**",
         inline=False
     )
     
@@ -402,7 +438,6 @@ class CloseTicketView(View):
 
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
-        # Call shared closing logic
         await perform_ticket_closure(interaction.channel, interaction.user) 
 
 
@@ -425,39 +460,76 @@ class VerificationView(View):
         apps = load_apps()
         app_link = apps.get(self.app_name_key)
         app_name_display = self.app_name_key.title()
-
-        if not app_link:
-            return await interaction.response.send_message("❌ App not found.", ephemeral=True)
-
-        embed = discord.Embed(
-            title="✅ Verification Approved! Access Granted!",
-            description=f"Congratulations, {self.user.mention}! Your verification for **{app_name_display}** has been approved by {interaction.user.mention} (Admin/Owner).\n\n"
-                        f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({app_link})** ⬅️\n\n"
-                        "Please use the link immediately.",
-            color=discord.Color.green()
-        )
-        embed.set_thumbnail(url=self.user.display_avatar.url)
-
-        await self.ticket_channel.send(embed=embed)
-
-        try:
-            await self.user.send(embed=embed)
-        except discord.Forbidden:
-            await self.ticket_channel.send("⚠ User has DMs disabled. Link sent only in the channel.")
-
-        await self.ticket_channel.send(
-            embed=discord.Embed(
-                title="🎉 Service Completed — Time to Close!",
-                description="We hope you received your premium link! Please close the ticket using the button below.",
-                color=discord.Color.green(),
-            ),
-            view=CloseTicketView()
-        )
         
-        self.stop()
-        await interaction.message.edit(content="✅ **VERIFIED:** Link has been sent.", view=None)
+        # --- PATH A: V2 (Multi-Step Verification) ---
+        if self.app_name_key in V2_APPS_LIST:
+            
+            links_v2 = load_v2_links()
+            v2_link = links_v2.get(self.app_name_key)
+            
+            if not v2_link:
+                return await interaction.response.send_message(f"❌ Error: V2 link not configured for {app_name_display}.", ephemeral=True)
 
-        await interaction.response.send_message("Verified! Link sent to user and ticket channel.", ephemeral=True)
+            # 1. Send V2 Prompt Message
+            embed_prompt = discord.Embed(
+                title="🎉 Verification 1 Completed! One More Step!",
+                description=f"Congratulations, {self.user.mention}! Your initial proof for **{app_name_display}** has been approved by {interaction.user.mention}.\n\n"
+                            "**PROCEED TO VERIFICATION 2:** This final step ensures security. Click the link below to get the final verification file, screenshot its contents, and upload it here!",
+                color=discord.Color.gold()
+            )
+            embed_prompt.add_field(
+                name="🔗 FINAL VERIFICATION STEP",
+                value=f"1. **[Click Here to Download Verification File]({v2_link})**\n"
+                      f"2. Open the file, take a screenshot of its content.\n"
+                      f"3. Upload the screenshot to this ticket.",
+                inline=False
+            )
+            
+            class V2LinkView(View):
+                def __init__(self, url):
+                    super().__init__(timeout=None)
+                    self.add_item(discord.ui.Button(label=f"GO TO V2 VERIFICATION SITE", url=url, style=discord.ButtonStyle.link))
+            
+            await self.ticket_channel.send(embed=embed_prompt, view=V2LinkView(v2_link))
+            
+            # Update verification panel message and disable button
+            self.stop()
+            await interaction.message.edit(content=f"✅ **V1 Approved:** Waiting for V2 proof from {self.user.mention}.", view=None)
+
+            return await interaction.response.send_message(f"✅ V2 verification initiated for {app_name_display}.", ephemeral=True)
+
+        else:
+            # --- PATH B: STANDARD (Single-Step Verification) ---
+            
+            if not app_link:
+                return await interaction.response.send_message("❌ App link not found.", ephemeral=True)
+            
+            embed = discord.Embed(
+                title="✅ Verification Approved! Access Granted!",
+                description=f"Congratulations, {self.user.mention}! Your verification for **{app_name_display}** has been approved by {interaction.user.mention}.\n\n"
+                            f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({app_link})** ⬅️\n\n",
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=self.user.display_avatar.url)
+
+            await self.ticket_channel.send(embed=embed)
+            await self.user.send(embed=embed) # Send DM
+            
+            # Final closure prompt
+            await self.ticket_channel.send(
+                embed=discord.Embed(
+                    title="🎉 Service Completed — Time to Close!",
+                    description="Please close the ticket using the button below.",
+                    color=discord.Color.green(),
+                ),
+                view=CloseTicketView()
+            )
+            
+            self.stop()
+            await interaction.message.edit(content="✅ **VERIFIED:** Link sent.", view=None)
+            
+            await interaction.response.send_message("Verified! Link sent.", ephemeral=True)
+
 
     @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="decline_button")
     async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -468,10 +540,7 @@ class VerificationView(View):
         
         embed = discord.Embed(
             title="❌ Verification Declined",
-            description=f"Your screenshot proof for **{app_name_display}** was declined by {interaction.user.mention}. This usually means:\n"
-                        "1. The subscription proof was incomplete.\n"
-                        "2. The image was unclear/blurry.\n"
-                        "Please resubmit a valid, full screenshot in the ticket.",
+            description=f"Your screenshot proof for **{app_name_display}** was declined by {interaction.user.mention}. Please resubmit a valid, full screenshot in the ticket.",
             color=discord.Color.red()
         )
 
@@ -486,6 +555,55 @@ class VerificationView(View):
 # =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
+
+# --- /verify_v2_final ---
+@bot.tree.command(name="verify_v2_final", description="✅ Complete Verification 2 and send the final premium link.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def verify_v2_final(interaction: discord.Interaction, app_name: str, user: discord.Member):
+
+    app_key = app_name.lower()
+    app_name_display = app_key.title()
+    apps = load_apps()
+    link = apps.get(app_key)
+
+    if app_key not in V2_APPS_LIST:
+        return await interaction.response.send_message("❌ Error: This command is only for Verification 2 apps.", ephemeral=True)
+    
+    if not link:
+        return await interaction.response.send_message(f"❌ Error: Final link not found for {app_name_display}.", ephemeral=True)
+    
+    # Find the ticket channel
+    ticket_channel = discord.utils.get(
+        interaction.guild.channels,
+        name=f"ticket-{user.id}"
+    )
+    if not ticket_channel:
+        return await interaction.response.send_message(f"❌ User has no open ticket.", ephemeral=True)
+
+    # 1. Send Final Link Embed
+    embed = discord.Embed(
+        title="✨ PREMIUM ACCESS GRANTED! (Verification 2 Complete)",
+        description=f"Congratulations, {user.mention}! Your verification process for **{app_name_display}** is fully complete.\n\n"
+                    f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({link})** ⬅️\n\n"
+                    "Please close this ticket when you are finished.",
+        color=discord.Color.green()
+    )
+
+    await ticket_channel.send(embed=embed)
+
+    # 2. Send Close Ticket Prompt
+    await ticket_channel.send(
+        embed=discord.Embed(
+            title="🎉 Service Completed — Time to Close!",
+            description="Please close the ticket using the button below.",
+            color=discord.Color.green(),
+        ),
+        view=CloseTicketView()
+    )
+    
+    await interaction.response.send_message(f"✅ Final link delivered to {ticket_channel.mention}", ephemeral=True)
+
 
 # --- /add_app ---
 @bot.tree.command(name="add_app", description="➕ Add a new premium app to the database")
@@ -508,6 +626,7 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
         color=discord.Color.green()
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
+
 
 # --- /remove_app ---
 @bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
@@ -623,25 +742,9 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
     except:
         pass
 
-# --- /refresh_panel (NEW ADMIN COMMAND) ---
-@bot.tree.command(name="refresh_panel", description="🔄 Deletes and resends the ticket creation panel.")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-@app_commands.checks.has_permissions(manage_guild=True)
-async def refresh_panel(interaction: discord.Interaction):
-    
-    if not TICKET_PANEL_CHANNEL_ID:
-        return await interaction.response.send_message("❌ Error: TICKET_PANEL_CHANNEL_ID is not configured.", ephemeral=True)
-
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    
-    # Call setup_ticket_panel with force_resend=True
-    await setup_ticket_panel(force_resend=True)
-    
-    await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-    
 
 # --- /send_app ---
-@bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket")
+@bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket (legacy/manual send)")
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def send_app(interaction: discord.Interaction, app_name: str, user: discord.Member):
@@ -715,6 +818,21 @@ async def view_tickets(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# --- /refresh_panel ---
+@bot.tree.command(name="refresh_panel", description="🔄 Deletes and resends the ticket creation panel.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def refresh_panel(interaction: discord.Interaction):
+    
+    if not TICKET_PANEL_CHANNEL_ID:
+        return await interaction.response.send_message("❌ Error: TICKET_PANEL_CHANNEL_ID is not configured.", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    
+    await setup_ticket_panel(force_resend=True)
+    
+    await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
+
 
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
@@ -751,29 +869,55 @@ async def on_message(message):
 
             screenshot = message.attachments[0].url
             ver_channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
-
-            embed = discord.Embed(
-                title="📸 Verification Proof Received!",
-                description=f"User {message.author.mention} submitted proof for **{matched_app_display}**.",
-                color=discord.Color.yellow()
-            )
-            embed.set_image(url=screenshot)
-
-            await ver_channel.send(
-                embed=embed,
-                view=VerificationView(message.channel, message.author, matched_app_key, screenshot)
-            )
-
-            await message.channel.send(
-                embed=discord.Embed(
-                    title="✅ Upload Successful! 🎉",
-                    description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
-                    color=discord.Color.blue()
+            
+            is_v2_app = matched_app_key in V2_APPS_LIST
+            
+            if is_v2_app:
+                # If the app is V2 required, we assume this is the V2 screenshot submission.
+                
+                embed = discord.Embed(
+                    title="📸 Verification 2 Proof Received!",
+                    description=f"Final proof for **{matched_app_display}** submitted by {message.author.mention}.\n\n"
+                                "✅ **Admin Action Required:** Review the attached screenshot and use the `/verify_v2_final` command to deliver the premium link.",
+                    color=discord.Color.yellow()
                 )
-            )
+                embed.set_image(url=screenshot)
+                
+                await ver_channel.send(embed=embed)
+                
+                await message.channel.send(
+                    embed=discord.Embed(
+                        title="✅ Upload Successful! Final Step Proof Received.",
+                        description="Thank you! The final verification proof has been forwarded to the Admin for review. You will receive your link shortly. ⏳",
+                        color=discord.Color.blue()
+                    )
+                )
+
+            else:
+                # If the app is standard (V1 only), this is the V1 screenshot submission.
+                
+                embed = discord.Embed(
+                    title="📸 Verification Proof Received!",
+                    description=f"User {message.author.mention} submitted proof for **{matched_app_display}**.",
+                    color=discord.Color.yellow()
+                )
+                embed.set_image(url=screenshot)
+    
+                await ver_channel.send(
+                    embed=embed,
+                    view=VerificationView(message.channel, message.author, matched_app_key, screenshot)
+                )
+    
+                await message.channel.send(
+                    embed=discord.Embed(
+                        title="✅ Upload Successful! 🎉",
+                        description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
+                        color=discord.Color.blue()
+                    )
+                )
 
         else:
-
+            # User mentioned app but provided no attachment
             await message.channel.send(
                 embed=discord.Embed(
                     title="📷 Screenshot Required",
@@ -785,11 +929,10 @@ async def on_message(message):
     await bot.process_commands(message)
 
 # ---------------------------
-# STARTUP FUNCTIONS (CORRECTED)
+# STARTUP FUNCTIONS
 # ---------------------------
 
-# FIX: Add the optional argument with a default value
-async def setup_ticket_panel(force_resend: bool = False):
+async def setup_ticket_panel(force_resend=False):
     """Finds or sends the persistent ticket creation button."""
     if not TICKET_PANEL_CHANNEL_ID:
         print("WARNING: TICKET_PANEL_CHANNEL_ID is not set. Skipping ticket panel setup.")
@@ -808,9 +951,8 @@ async def setup_ticket_panel(force_resend: bool = False):
     
     try:
         panel_message_found = False
-        panel_message = None # Store message object for potential deletion
+        panel_message = None 
 
-        # Find the existing panel message
         async for message in channel.history(limit=5):
             if message.author == bot.user and message.components:
                 if message.components[0].children[0].custom_id == "persistent_create_ticket_button":
@@ -818,15 +960,12 @@ async def setup_ticket_panel(force_resend: bool = False):
                     panel_message = message
                     break
         
-        # CRITICAL REFRESH LOGIC
         if panel_message_found and force_resend:
-            # If forced to resend, delete the old message
             await panel_message.delete()
             panel_message_found = False
             print("Deleted old ticket panel message due to /refresh_panel command.")
 
         if not panel_message_found:
-            # Send a new one if not found or if the old one was just deleted
             await channel.send(embed=panel_embed, view=TicketPanelButton())
             print("Sent new persistent ticket panel.")
 
@@ -834,6 +973,7 @@ async def setup_ticket_panel(force_resend: bool = False):
         print("ERROR: Missing permissions to read or send messages in the ticket panel channel.")
     except Exception as e:
         print(f"An unexpected error occurred during panel setup: {e}")
+
 
 # =============================
 # ON READY
@@ -846,7 +986,6 @@ async def on_ready():
     bot.add_view(CloseTicketView())
     bot.add_view(TicketPanelButton())
     
-    # Run panel setup after commands are synced
     await setup_ticket_panel()
 
     print(f"🟢 Bot logged in successfully as {bot.user}")
