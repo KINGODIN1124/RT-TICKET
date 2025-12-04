@@ -13,8 +13,8 @@ from threading import Thread
 # ---------------------------
 # GLOBAL CONFIGURATION
 # ---------------------------
-# Only 'bilibili' requires the two-step verification process
-V2_APPS_LIST = ["bilibili"] 
+# Apps requiring the two-step verification process (MUST be lowercase)
+V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
 
 # ---------------------------
 # Environment Variables
@@ -76,7 +76,7 @@ def save_apps(apps):
 
 
 # ---------------------------
-# Load / Save V2 Links (New Data Source)
+# Load / Save V2 Links (CRITICAL UPDATE)
 # ---------------------------
 def load_v2_links():
     """Loads the V2 website links for the second verification step."""
@@ -85,10 +85,12 @@ def load_v2_links():
             return json.load(f)
     except FileNotFoundError:
         print("Warning: v2_links.json not found. Creating file with default data.")
+        # FIX: Standardized V2 link for all V2 apps
+        v2_site_url = "https://verification2-djde.onrender.com"
         default_v2 = {
-            "bilibili": "https://verification2-djde.onrender.com/bilibili", 
-            "hotstar": "https://verification2-djde.onrender.com/hotstar", 
-            "vpn": "https://verification2-djde.onrender.com/vpn", 
+            "bilibili": v2_site_url, 
+            "hotstar": v2_site_url, 
+            "vpn": v2_site_url, 
         }
         with open("v2_links.json", "w") as f:
             json.dump(default_v2, f, indent=4)
@@ -320,7 +322,7 @@ async def create_new_ticket(interaction: discord.Interaction):
 
 
 # =============================
-# APP SELECT VIEW (CRITICAL LINK FIX)
+# APP SELECT VIEW (CRITICAL FIX FOR LOCKING)
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
@@ -334,44 +336,59 @@ class AppDropdown(Select):
         self.user = user
 
     async def callback(self, interaction: discord.Interaction):
+        # Acknowledge interaction immediately
+        await interaction.response.defer() 
+        
         app_key = self.values[0]
         app_name_display = app_key.title()
         app_emoji = get_app_emoji(app_key)
         
         is_v2_app = app_key in V2_APPS_LIST
         
+        # --- LOCK THE SELECTION ---
+        # Edit the original message to remove the dropdown view
+        await interaction.message.edit(
+            content=f"**✅ Selection Locked: {app_name_display}**\n\nSee the specific instructions below.",
+            embed=None,
+            view=None
+        )
+        # --------------------------
+
         # --- CONDITIONAL INSTRUCTION LOGIC ---
         if is_v2_app:
             v2_link = v2_links.get(app_key)
             
             if not v2_link:
-                 return await interaction.response.send_message(
-                    f"❌ Setup Error: V2 link not configured for {app_name_display}. Admin needs to fix v2_links.json.", 
-                    ephemeral=True
+                 embed_error = discord.Embed(
+                    title="❌ Setup Error: V2 Link Missing",
+                    description=f"Admin: V2 link for {app_name_display} is not configured in v2_links.json.", 
+                    color=discord.Color.red()
                  )
+                 return await interaction.followup.send(embed=embed_error, ephemeral=False)
 
             # V2 App: Detailed, specific instructions (V1 + V2 explained upfront)
             embed = discord.Embed(
                 title=f"{app_emoji} 2-STEP VERIFICATION REQUIRED: {app_name_display} 🔒",
                 description=f"You have selected **{app_name_display}**. This app requires two security steps. Please complete **Step 1** now.",
-                color=discord.Color.from_rgb(255, 165, 0) # Orange/Gold
+                color=discord.Color.from_rgb(255, 165, 0)
             )
             
             # FIX: Used f-string formatting for working hyperlink
             embed.add_field(
-                name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF",
+                name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
                       f"2. Take a clear **screenshot** of your subscription.\n"
-                      f"3. **Post the screenshot** in this ticket to unlock Step 2.",
+                      f"3. **Post the screenshot** and type **`RASH TECH`** in the message. (Example: `RASH TECH [screenshot attachment]`)", # Updated keyword usage
                 inline=False
             )
             
+            # FIX: Standardized V2 link usage
             embed.add_field(
-                name="➡️ STEP 2: FINAL ACCESS CHECK",
+                name="➡️ STEP 2: FINAL KEY CHECK (V2)",
                 value=f"This step is required **AFTER** Admin approves your Step 1 proof.\n"
                       f"1. Go to the final verification site: **[Click Here]({v2_link})**\n"
-                      f"2. Download the required file for **{app_name_display}**.\n"
-                      f"3. Take a screenshot of the open file and submit the proof to this ticket.",
+                      f"2. Download the file, find the secret code (e.g., **`{app_name_display} KEY`**).\n"
+                      f"3. **Resubmit the screenshot** of the open file and type the exact code: **`{app_name_display} KEY: <code_here>`**.",
                 inline=False
             )
         
@@ -383,16 +400,15 @@ class AppDropdown(Select):
                 color=discord.Color.blue()
             )
             
-            # FIX: Used f-string formatting for working hyperlink
             embed.add_field(
-                name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF",
+                name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
                       f"2. Take a clear **screenshot** of your subscription.\n"
-                      f"3. **Post the screenshot** in this ticket. The Admin will send your final link upon approval.",
+                      f"3. **Post the screenshot** and type **`RASH TECH`**. The bot will send your final link upon approval.", # Updated keyword usage
                 inline=False
             )
             
-        await interaction.response.send_message(embed=embed, ephemeral=False)
+        await interaction.followup.send(embed=embed, ephemeral=False)
 
 
 class AppSelect(View):
@@ -511,17 +527,10 @@ class VerificationView(View):
 
             # 1. Send V2 Prompt Message
             embed_prompt = discord.Embed(
-                title="🎉 Verification 1 Completed! One More Step!",
-                description=f"Congratulations, {self.user.mention}! Your initial proof for **{app_name_display}** has been approved by {interaction.user.mention}.\n\n"
-                            "**PROCEED TO VERIFICATION 2:** This final step ensures security. Click the link below to get the final verification file, screenshot its contents, and upload it here!",
+                title=f"✅ V1 Proof Approved for {app_name_display}!",
+                description=f"Initial subscription proof verified by {interaction.user.mention}. \n\n"
+                            "**{self.user.mention}** please proceed to the next step using the link and instructions provided when you selected the app.",
                 color=discord.Color.gold()
-            )
-            embed_prompt.add_field(
-                name="🔗 FINAL VERIFICATION STEP",
-                value=f"1. **[Click Here to Download Verification File]({v2_link})**\n"
-                      f"2. Open the file, take a screenshot of its content.\n"
-                      f"3. Upload the screenshot to this ticket.",
-                inline=False
             )
             
             class V2LinkView(View):
@@ -535,7 +544,7 @@ class VerificationView(View):
             self.stop()
             await interaction.message.edit(content=f"✅ **V1 Approved:** Waiting for V2 proof from {self.user.mention}.", view=None)
 
-            return await interaction.response.send_message(f"✅ V2 verification initiated for {app_name_display}.", ephemeral=True)
+            return await interaction.response.send_message(f"✅ V1 approved. Waiting for V2 screenshot.", ephemeral=True)
 
         else:
             # --- PATH B: STANDARD (Single-Step Verification) ---
@@ -589,7 +598,9 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-        # =============================
+
+
+# =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
@@ -869,7 +880,7 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-    # =============================
+# =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
@@ -886,81 +897,109 @@ async def ticket(interaction: discord.Interaction):
 @bot.event
 async def on_message(message):
 
-    if message.author.bot:
+    if message.author.bot or not message.channel.name.startswith("ticket-"):
         return
 
-    if not message.channel.name.startswith("ticket-"):
-        return
-
+    content_upper = message.content.upper()
+    content_lower = message.content.lower()
+    
     apps = load_apps()
-    content = message.content.lower()
-
-    matched_app_key = next((key for key in apps if key in content), None)
-
-    if matched_app_key:
-        matched_app_display = matched_app_key.title()
-
-        if message.attachments:
-
-            screenshot = message.attachments[0].url
-            ver_channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
-            
-            is_v2_app = matched_app_key in V2_APPS_LIST
-            
-            if is_v2_app:
-                # If the app is V2 required, we assume this is the V2 screenshot submission.
-                
-                embed = discord.Embed(
-                    title="📸 Verification 2 Proof Received!",
-                    description=f"Final proof for **{matched_app_display}** submitted by {message.author.mention}.\n\n"
-                                "✅ **Admin Action Required:** Review the attached screenshot and use the `/verify_v2_final` command to deliver the premium link.",
-                    color=discord.Color.yellow()
-                )
-                embed.set_image(url=screenshot)
-                
-                await ver_channel.send(embed=embed)
-                
-                await message.channel.send(
-                    embed=discord.Embed(
-                        title="✅ Upload Successful! Final Step Proof Received.",
-                        description="Thank you! The final verification proof has been forwarded to the Admin for review. You will receive your link shortly. ⏳",
-                        color=discord.Color.blue()
-                    )
-                )
-
-            else:
-                # If the app is standard (V1 only), this is the V1 screenshot submission.
-                
-                embed = discord.Embed(
-                    title="📸 Verification Proof Received!",
-                    description=f"User {message.author.mention} submitted proof for **{matched_app_display}**.",
-                    color=discord.Color.yellow()
-                )
-                embed.set_image(url=screenshot)
+    matched_app_key = next((key for key in apps if key in content_lower), None)
+    has_attachment = bool(message.attachments)
     
-                await ver_channel.send(
-                    embed=embed,
-                    view=VerificationView(message.channel, message.author, matched_app_key, screenshot)
-                )
-    
-                await message.channel.send(
-                    embed=discord.Embed(
-                        title="✅ Upload Successful! 🎉",
-                        description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
-                        color=discord.Color.blue()
-                    )
-                )
-
-        else:
-            # User mentioned app but provided no attachment
+    # We only proceed if an app key is mentioned AND an attachment exists
+    if matched_app_key and has_attachment:
+        
+        app_key = matched_app_key
+        app_name_display = app_key.title()
+        screenshot = message.attachments[0].url
+        ver_channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
+        is_v2_app = app_key in V2_APPS_LIST
+        
+        # --- CHECK 1: V2 Final Screenshot Submission ---
+        # Look for [APP NAME] KEY in the content for V2 apps
+        v2_key_word = f"{app_name_display.upper()} KEY" 
+        is_v2_verified = v2_key_word in content_upper
+        
+        if is_v2_app and is_v2_verified:
+            # SUCCESS PATH: V2 Proof Confirmed!
+            
+            embed = discord.Embed(
+                title=f"🎉 V2 Proof Received for {app_name_display}!",
+                description=f"Final proof confirmed by keyword check. The process is complete.\n\n"
+                            f"✅ **Admin Action Required:** Review the attached screenshot and use the `/verify_v2_final app_name:{app_key}` to send the final link.",
+                color=discord.Color.green()
+            )
+            embed.set_image(url=screenshot)
+            await ver_channel.send(embed=embed)
+            
             await message.channel.send(
                 embed=discord.Embed(
-                    title="📷 Screenshot Required",
-                    description=f"You mentioned **{matched_app_display}**. Please upload the subscription screenshot to proceed.",
-                    color=discord.Color.orange()
+                    title="✅ Upload Successful! Final Step Proof Received.",
+                    description="Thank you! The final verification proof has been forwarded to the Admin for review. You will receive your link shortly. ⏳",
+                    color=discord.Color.blue()
                 )
             )
+            return
 
+        # --- CHECK 2: V1 Subscription Proof Submission ---
+        # Look for 'RASH TECH' keyword for V1 proof
+        is_rash_tech_verified = "RASH TECH" in content_upper
+
+        if is_rash_tech_verified:
+            # V1 Proof is valid—forward to admin for manual button approval
+            
+            embed = discord.Embed(
+                title="📸 Verification Proof Received!",
+                description=f"User {message.author.mention} submitted proof for **{app_name_display}**.",
+                color=discord.Color.yellow()
+            )
+            embed.set_image(url=screenshot)
+            
+            # Send the V1 verification panel with buttons
+            await ver_channel.send(
+                embed=embed,
+                view=VerificationView(message.channel, message.author, app_key, screenshot)
+            )
+            
+            # Give immediate user feedback
+            await message.channel.send(
+                embed=discord.Embed(
+                    title="✅ Upload Successful! 🎉",
+                    description="Thank you for providing proof! Please wait patiently while the **Owner/Admin** verifies your screenshot. Once verified, you will receive your app link here. ⏳",
+                    color=discord.Color.blue()
+                )
+            )
+            return
+        
+        # --- CHECK 3: Failed Keyword Check ---
+        else:
+            # Failed V1 (Security Keyword) check
+            
+            required_keywords = ["RASH TECH"]
+            if is_v2_app:
+                required_keywords.append(f"{app_name_display.upper()} KEY")
+                
+            required_keyword_str = ' or '.join(f"**`{kw}`**" for kw in required_keywords)
+
+            embed = discord.Embed(
+                title="⚠️ Security Check Failed: Keyword Missing",
+                description=f"You must include the required security keyword (**{required_keyword_str}**) in your message along with the screenshot. This confirms you read the instructions.",
+                color=discord.Color.red()
+            )
+            return await message.channel.send(embed=embed)
+
+
+    # If app name was mentioned but no attachment was found
+    elif matched_app_key and not has_attachment:
+         await message.channel.send(
+            embed=discord.Embed(
+                title="📷 Screenshot Required",
+                description=f"You mentioned **{matched_app_display}**. Please ensure you upload the screenshot along with the keyword.",
+                color=discord.Color.orange()
+            )
+        )
+    
     await bot.process_commands(message)
 
 # ---------------------------
@@ -1036,3 +1075,4 @@ if __name__ == "__main__":
     
     # 2. Start the Discord client (only once)
     bot.run(TOKEN)
+  
