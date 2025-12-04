@@ -76,7 +76,7 @@ def save_apps(apps):
 
 
 # ---------------------------
-# Load / Save V2 Links (CRITICAL UPDATE)
+# Load / Save V2 Links (New Data Source)
 # ---------------------------
 def load_v2_links():
     """Loads the V2 website links for the second verification step."""
@@ -85,7 +85,7 @@ def load_v2_links():
             return json.load(f)
     except FileNotFoundError:
         print("Warning: v2_links.json not found. Creating file with default data.")
-        # FIX: Standardized V2 link for all V2 apps
+        # User needs to update these links to their actual hosted HTML pages
         v2_site_url = "https://verification2-djde.onrender.com"
         default_v2 = {
             "bilibili": v2_site_url, 
@@ -271,7 +271,7 @@ async def create_new_ticket(interaction: discord.Interaction):
     # --- ENHANCED STYLISH WELCOME MESSAGE ---
     embed = discord.Embed(
         title="🌟 Welcome to the Premium Access Ticket Center! 🚀",
-        description=f"Hello {user.mention}! Thank you for choosing our services. We are here to provide you with quick access to premium content. \n\n"
+        description=f"Hello {user.mention}! Thank free for choosing our services. We are here to provide you with quick access to premium content. \n\n"
                     "**Please read the information below before proceeding.**",
         color=discord.Color.from_rgb(50, 200, 255)
     )
@@ -322,7 +322,7 @@ async def create_new_ticket(interaction: discord.Interaction):
 
 
 # =============================
-# APP SELECT VIEW (CRITICAL FIX FOR LOCKING)
+# APP SELECT VIEW
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
@@ -346,7 +346,6 @@ class AppDropdown(Select):
         is_v2_app = app_key in V2_APPS_LIST
         
         # --- LOCK THE SELECTION ---
-        # Edit the original message to remove the dropdown view
         await interaction.message.edit(
             content=f"**✅ Selection Locked: {app_name_display}**\n\nSee the specific instructions below.",
             embed=None,
@@ -370,19 +369,19 @@ class AppDropdown(Select):
             embed = discord.Embed(
                 title=f"{app_emoji} 2-STEP VERIFICATION REQUIRED: {app_name_display} 🔒",
                 description=f"You have selected **{app_name_display}**. This app requires two security steps. Please complete **Step 1** now.",
-                color=discord.Color.from_rgb(255, 165, 0)
+                color=discord.Color.from_rgb(255, 165, 0) # Orange/Gold
             )
             
-            # FIX: Used f-string formatting for working hyperlink
+            # FIX: Using f-string for working YouTube link
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
                       f"2. Take a clear **screenshot** of your subscription.\n"
-                      f"3. **Post the screenshot** and type **`RASH TECH`** in the message. (Example: `RASH TECH [screenshot attachment]`)", # Updated keyword usage
+                      f"3. **Post the screenshot** and type **`RASH TECH`** in the message.",
                 inline=False
             )
             
-            # FIX: Standardized V2 link usage
+            # FIX: Using f-string for V2 link
             embed.add_field(
                 name="➡️ STEP 2: FINAL KEY CHECK (V2)",
                 value=f"This step is required **AFTER** Admin approves your Step 1 proof.\n"
@@ -400,11 +399,12 @@ class AppDropdown(Select):
                 color=discord.Color.blue()
             )
             
+            # FIX: Using f-string for working YouTube link
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
                       f"2. Take a clear **screenshot** of your subscription.\n"
-                      f"3. **Post the screenshot** and type **`RASH TECH`**. The bot will send your final link upon approval.", # Updated keyword usage
+                      f"3. **Post the screenshot** and type **`RASH TECH`**. The bot will send your final link upon approval.",
                 inline=False
             )
             
@@ -500,6 +500,7 @@ class CloseTicketView(View):
 # VERIFICATION VIEW
 # =============================
 class VerificationView(View):
+    # This view is only used for STANDARD (V1-only) apps now.
     def __init__(self, ticket_channel, user, app_name_key, screenshot_url):
         super().__init__(timeout=3600) 
         self.ticket_channel = ticket_channel
@@ -512,71 +513,19 @@ class VerificationView(View):
         if not interaction.user.guild_permissions.manage_guild:
             return await interaction.response.send_message("❌ You do not have permission to verify.", ephemeral=True)
 
-        apps = load_apps()
-        app_link = apps.get(self.app_name_key)
-        app_name_display = self.app_name_key.title()
+        app_key = self.app_name_key
+        user = self.user
+        app_name_display = app_key.title()
+        # --- PATH B: STANDARD (Single-Step Verification) ---
         
-        # --- PATH A: V2 (Multi-Step Verification) ---
-        if self.app_name_key in V2_APPS_LIST:
-            
-            links_v2 = load_v2_links()
-            v2_link = links_v2.get(self.app_name_key)
-            
-            if not v2_link:
-                return await interaction.response.send_message(f"❌ Error: V2 link not configured for {app_name_display}.", ephemeral=True)
-
-            # 1. Send V2 Prompt Message
-            embed_prompt = discord.Embed(
-                title=f"✅ V1 Proof Approved for {app_name_display}!",
-                description=f"Initial subscription proof verified by {interaction.user.mention}. \n\n"
-                            "**{self.user.mention}** please proceed to the next step using the link and instructions provided when you selected the app.",
-                color=discord.Color.gold()
-            )
-            
-            class V2LinkView(View):
-                def __init__(self, url):
-                    super().__init__(timeout=None)
-                    self.add_item(discord.ui.Button(label=f"GO TO V2 VERIFICATION SITE", url=url, style=discord.ButtonStyle.link))
-            
-            await self.ticket_channel.send(embed=embed_prompt, view=V2LinkView(v2_link))
-            
-            # Update verification panel message and disable button
-            self.stop()
-            await interaction.message.edit(content=f"✅ **V1 Approved:** Waiting for V2 proof from {self.user.mention}.", view=None)
-
-            return await interaction.response.send_message(f"✅ V1 approved. Waiting for V2 screenshot.", ephemeral=True)
-
-        else:
-            # --- PATH B: STANDARD (Single-Step Verification) ---
-            
-            if not app_link:
-                return await interaction.response.send_message("❌ App link not found.", ephemeral=True)
-            
-            embed = discord.Embed(
-                title="✅ Verification Approved! Access Granted!",
-                description=f"Congratulations, {self.user.mention}! Your verification for **{app_name_display}** has been approved by {interaction.user.mention}.\n\n"
-                            f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({app_link})** ⬅️\n\n",
-                color=discord.Color.green()
-            )
-            embed.set_thumbnail(url=self.user.display_avatar.url)
-
-            await self.ticket_channel.send(embed=embed)
-            await self.user.send(embed=embed) # Send DM
-            
-            # Final closure prompt
-            await self.ticket_channel.send(
-                embed=discord.Embed(
-                    title="🎉 Service Completed — Time to Close!",
-                    description="Please close the ticket using the button below.",
-                    color=discord.Color.green(),
-                ),
-                view=CloseTicketView()
-            )
-            
-            self.stop()
-            await interaction.message.edit(content="✅ **VERIFIED:** Link sent.", view=None)
-            
-            await interaction.response.send_message("Verified! Link sent.", ephemeral=True)
+        # Deliver link and send closure prompt (V1 Standard App only)
+        await deliver_and_close(self.ticket_channel, user, app_key)
+        
+        # Update verification panel message and disable button
+        self.stop()
+        await interaction.message.edit(content=f"✅ **VERIFIED:** Link sent to {user.mention}.", view=None)
+        
+        await interaction.response.send_message("Verified! Link sent.", ephemeral=True)
 
 
     @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="decline_button")
@@ -629,26 +578,8 @@ async def verify_v2_final(interaction: discord.Interaction, app_name: str, user:
     if not ticket_channel:
         return await interaction.response.send_message(f"❌ User has no open ticket.", ephemeral=True)
 
-    # 1. Send Final Link Embed
-    embed = discord.Embed(
-        title="✨ PREMIUM ACCESS GRANTED! (Verification 2 Complete)",
-        description=f"Congratulations, {user.mention}! Your verification process for **{app_name_display}** is fully complete.\n\n"
-                    f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({link})** ⬅️\n\n"
-                    "Please close this ticket when you are finished.",
-        color=discord.Color.green()
-    )
-
-    await ticket_channel.send(embed=embed)
-
-    # 2. Send Close Ticket Prompt
-    await ticket_channel.send(
-        embed=discord.Embed(
-            title="🎉 Service Completed — Time to Close!",
-            description="Please close the ticket using the button below.",
-            color=discord.Color.green(),
-        ),
-        view=CloseTicketView()
-    )
+    # Use the shared delivery logic
+    await deliver_and_close(ticket_channel, user, app_key)
     
     await interaction.response.send_message(f"✅ Final link delivered to {ticket_channel.mention}", ephemeral=True)
 
@@ -880,7 +811,7 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-# =============================
+    # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
@@ -995,7 +926,7 @@ async def on_message(message):
          await message.channel.send(
             embed=discord.Embed(
                 title="📷 Screenshot Required",
-                description=f"You mentioned **{matched_app_display}**. Please ensure you upload the screenshot along with the keyword.",
+                description=f"You mentioned **{app_name_display}**. Please ensure you upload the screenshot along with the keyword.",
                 color=discord.Color.orange()
             )
         )
@@ -1075,4 +1006,3 @@ if __name__ == "__main__":
     
     # 2. Start the Discord client (only once)
     bot.run(TOKEN)
-  
