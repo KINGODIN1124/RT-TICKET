@@ -13,8 +13,8 @@ from threading import Thread
 # ---------------------------
 # GLOBAL CONFIGURATION
 # ---------------------------
-# The app(s) requiring the two-step verification process (MUST be lowercase)
-V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
+# Only 'bilibili' requires the two-step verification process
+V2_APPS_LIST = ["bilibili"] 
 
 # ---------------------------
 # Environment Variables
@@ -25,6 +25,7 @@ try:
     TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
     VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
     
+    # Optional Channels
     TICKET_PANEL_CHANNEL_ID = os.getenv("TICKET_PANEL_CHANNEL_ID")
     if TICKET_PANEL_CHANNEL_ID:
         TICKET_PANEL_CHANNEL_ID = int(TICKET_PANEL_CHANNEL_ID)
@@ -84,7 +85,6 @@ def load_v2_links():
             return json.load(f)
     except FileNotFoundError:
         print("Warning: v2_links.json not found. Creating file with default data.")
-        # User needs to update these links to their actual hosted HTML pages
         default_v2 = {
             "bilibili": "https://verification2-djde.onrender.com/bilibili", 
             "hotstar": "https://verification2-djde.onrender.com/hotstar", 
@@ -320,7 +320,7 @@ async def create_new_ticket(interaction: discord.Interaction):
 
 
 # =============================
-# APP SELECT VIEW (CRITICAL UPDATE)
+# APP SELECT VIEW (CRITICAL LINK FIX)
 # =============================
 class AppDropdown(Select):
     def __init__(self, options, user):
@@ -338,8 +338,10 @@ class AppDropdown(Select):
         app_name_display = app_key.title()
         app_emoji = get_app_emoji(app_key)
         
+        is_v2_app = app_key in V2_APPS_LIST
+        
         # --- CONDITIONAL INSTRUCTION LOGIC ---
-        if app_key in V2_APPS_LIST:
+        if is_v2_app:
             v2_link = v2_links.get(app_key)
             
             if not v2_link:
@@ -355,20 +357,21 @@ class AppDropdown(Select):
                 color=discord.Color.from_rgb(255, 165, 0) # Orange/Gold
             )
             
+            # FIX: Used f-string formatting for working hyperlink
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF",
-                value="1. Subscribe to our channel: **[Click Here]({})**\n"
-                      "2. Take a clear **screenshot** of your subscription.\n"
-                      "3. **Post the screenshot** in this ticket to unlock Step 2.",
+                value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
+                      f"2. Take a clear **screenshot** of your subscription.\n"
+                      f"3. **Post the screenshot** in this ticket to unlock Step 2.",
                 inline=False
             )
             
             embed.add_field(
                 name="➡️ STEP 2: FINAL ACCESS CHECK",
                 value=f"This step is required **AFTER** Admin approves your Step 1 proof.\n"
-                      f"1. **Admin sends you the FINAL SITE LINK.**\n"
-                      f"2. You go to the site, download the file, screenshot it, and submit the V2 proof here.\n"
-                      f"3. Admin runs `/verify_v2_final` to give you your link.",
+                      f"1. Go to the final verification site: **[Click Here]({v2_link})**\n"
+                      f"2. Download the required file for **{app_name_display}**.\n"
+                      f"3. Take a screenshot of the open file and submit the proof to this ticket.",
                 inline=False
             )
         
@@ -380,11 +383,12 @@ class AppDropdown(Select):
                 color=discord.Color.blue()
             )
             
+            # FIX: Used f-string formatting for working hyperlink
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF",
-                value="1. Subscribe to our channel: **[Click Here]({})**\n"
-                      "2. Take a clear **screenshot** of your subscription.\n"
-                      "3. **Post the screenshot** in this ticket. The Admin will send your final link upon approval.",
+                value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
+                      f"2. Take a clear **screenshot** of your subscription.\n"
+                      f"3. **Post the screenshot** in this ticket. The Admin will send your final link upon approval.",
                 inline=False
             )
             
@@ -505,16 +509,21 @@ class VerificationView(View):
             if not v2_link:
                 return await interaction.response.send_message(f"❌ Error: V2 link not configured for {app_name_display}.", ephemeral=True)
 
-            # 1. Send V2 Prompt Message (The user already has the link from the selection message, 
-            # this is just the ADMIN approval confirmation step that kicks off V2 submission)
+            # 1. Send V2 Prompt Message
             embed_prompt = discord.Embed(
-                title=f"✅ V1 Proof Approved for {app_name_display}!",
-                description=f"Initial subscription proof verified by {interaction.user.mention}. \n\n"
-                            "**{self.user.mention}** please proceed to the next step using the link and instructions provided when you selected the app.",
+                title="🎉 Verification 1 Completed! One More Step!",
+                description=f"Congratulations, {self.user.mention}! Your initial proof for **{app_name_display}** has been approved by {interaction.user.mention}.\n\n"
+                            "**PROCEED TO VERIFICATION 2:** This final step ensures security. Click the link below to get the final verification file, screenshot its contents, and upload it here!",
                 color=discord.Color.gold()
             )
+            embed_prompt.add_field(
+                name="🔗 FINAL VERIFICATION STEP",
+                value=f"1. **[Click Here to Download Verification File]({v2_link})**\n"
+                      f"2. Open the file, take a screenshot of its content.\n"
+                      f"3. Upload the screenshot to this ticket.",
+                inline=False
+            )
             
-            # Send button for easy access to the V2 site (optional but helpful)
             class V2LinkView(View):
                 def __init__(self, url):
                     super().__init__(timeout=None)
@@ -526,7 +535,7 @@ class VerificationView(View):
             self.stop()
             await interaction.message.edit(content=f"✅ **V1 Approved:** Waiting for V2 proof from {self.user.mention}.", view=None)
 
-            return await interaction.response.send_message(f"✅ V1 approved. Waiting for V2 screenshot.", ephemeral=True)
+            return await interaction.response.send_message(f"✅ V2 verification initiated for {app_name_display}.", ephemeral=True)
 
         else:
             # --- PATH B: STANDARD (Single-Step Verification) ---
@@ -580,9 +589,7 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-
-
-# =============================
+        # =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
@@ -862,9 +869,7 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-
-
-# =============================
+    # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
@@ -1031,4 +1036,3 @@ if __name__ == "__main__":
     
     # 2. Start the Discord client (only once)
     bot.run(TOKEN)
-          
