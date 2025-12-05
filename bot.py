@@ -9,21 +9,22 @@ import datetime
 import asyncio
 from flask import Flask
 from threading import Thread
+# CRITICAL: Google Cloud Vision API client
+from google.cloud import vision 
+# NOTE: You must install google-cloud-vision and set GOOGLE_APPLICATION_CREDENTIALS
 
 # ---------------------------
 # GLOBAL CONFIGURATION
 # ---------------------------
-# Apps requiring the two-step verification process (MUST be lowercase)
 V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
-
-# Cooldown time in hours (168 hours = 7 days)
 COOLDOWN_HOURS = 168
 
-# Ticket operational hours (2:00 PM UTC to 11:59 PM UTC)
 TICKET_START_HOUR_UTC = 14  # 2:00 PM UTC
-TICKET_END_HOUR_UTC = 24    # Represents 00:00 (midnight) to include 11:59 PM UTC
-
+TICKET_END_HOUR_UTC = 24    # 11:59 PM UTC
 TICKET_CREATION_STATUS = True 
+
+# Keywords required for the V1 Subscription Proof check (used by OCR)
+V1_REQUIRED_KEYWORDS = ["RASH", "TECH", "SUBSCRIBED"] 
 
 # ---------------------------
 # Environment Variables
@@ -34,7 +35,6 @@ try:
     TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID"))
     VERIFICATION_CHANNEL_ID = int(os.getenv("VERIFICATION_CHANNEL_ID"))
     
-    # Optional Channels
     TICKET_PANEL_CHANNEL_ID = os.getenv("TICKET_PANEL_CHANNEL_ID")
     if TICKET_PANEL_CHANNEL_ID:
         TICKET_PANEL_CHANNEL_ID = int(TICKET_PANEL_CHANNEL_ID)
@@ -144,15 +144,47 @@ def get_app_emoji(app_key: str) -> str:
     return "✨"
 
 def is_ticket_time_allowed() -> bool:
-    """Checks if the current time is between 2:00 PM and 11:59 PM UTC."""
+    """Checks if the current time is between 2:00 PM and 11:59 PM UTC (Every Day)."""
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     current_hour = now_utc.hour
     
-    # Check Time: 14 <= hour < 24 (Daily operation)
     if TICKET_START_HOUR_UTC <= current_hour < TICKET_END_HOUR_UTC:
         return True
     
     return False
+
+# NEW OCR FUNCTION
+async def check_v1_ocr(image_url: str) -> bool:
+    """Performs OCR check on the image URL for V1 Subscription Proof."""
+    
+    try:
+        # Initialize the Vision client (uses GOOGLE_APPLICATION_CREDENTIALS)
+        client = vision.ImageAnnotatorAsyncClient()
+        
+        # Prepare the image request
+        image = vision.Image()
+        image.source.image_uri = image_url
+        
+        # Use TEXT_DETECTION for general OCR
+        response = await client.text_detection(image=image)
+        
+        full_text = response.full_text_annotation.text.upper() if response.full_text_annotation else ""
+
+        print(f"OCR TEXT DETECTED: {full_text[:100]}...")
+        
+        # Check for all required keywords (RASH, TECH, SUBSCRIBED)
+        for keyword in V1_REQUIRED_KEYWORDS:
+            if keyword not in full_text:
+                print(f"OCR FAILED: Missing keyword '{keyword}'")
+                return False 
+
+        return True
+
+    except Exception as e:
+        print(f"OCR CHECK ERROR (API Failure or Permission): {e}")
+        # If the API call fails, we revert to manual check by returning False
+        return False 
+
 
 # ---------------------------
 # Flask Keepalive Server
@@ -248,6 +280,44 @@ async def perform_ticket_closure(channel: discord.TextChannel, closer: discord.U
     await channel.delete()
 
 # ---------------------------
+# CORE TICKET LINK DELIVERY LOGIC (Shared)
+# ---------------------------
+async def deliver_and_close(channel: discord.TextChannel, user: discord.Member, app_key: str):
+    """Delivers the final app link and initiates the ticket closure prompt."""
+    
+    apps = load_apps()
+    app_link = apps.get(app_key)
+    app_name_display = app_key.title()
+
+    if not app_link:
+        return await channel.send("❌ Error: Final link not found. Please contact an admin.")
+    
+    embed = discord.Embed(
+        title="✅ Verification Approved! Access Granted!",
+        description=f"Congratulations, {user.mention}! Your verification for **{app_name_display}** is complete.\n\n"
+                    f"➡️ **[CLICK HERE FOR YOUR PREMIUM APP LINK]({app_link})** ⬅️\n\n",
+        color=discord.Color.green()
+    )
+    embed.set_thumbnail(url=user.display_avatar.url)
+
+    await channel.send(embed=embed)
+    
+    try:
+        await user.send(embed=embed) # Send DM
+    except discord.Forbidden:
+        pass # Ignore if DMs are closed
+
+    # Final closure prompt
+    await channel.send(
+        embed=discord.Embed(
+            title="🎉 Service Completed — Time to Close!",
+            description="Please close the ticket using the button below.",
+            color=discord.Color.green(),
+        ),
+        view=CloseTicketView()
+    )
+
+# ---------------------------
 # CORE TICKET LOGIC (Shared by /ticket and Button)
 # ---------------------------
 async def create_new_ticket(interaction: discord.Interaction):
@@ -258,7 +328,6 @@ async def create_new_ticket(interaction: discord.Interaction):
     if not TICKET_CREATION_STATUS or not is_ticket_time_allowed():
         
         closed_embed = discord.Embed(
-            # UPDATED TEXT TO REFLECT DAILY OPERATION
             title="Ticket System Offline 💥",
             description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Daily: {TICKET_START_HOUR_UTC}:00 to {TICKET_END_HOUR_UTC - 1}:59 UTC).",
             color=discord.Color.red()
@@ -445,8 +514,6 @@ class AppDropdown(Select):
             )
             
         await interaction.followup.send(embed=embed, ephemeral=False)
-
-
 class AppSelect(View):
     def __init__(self, user):
         super().__init__(timeout=1800)
@@ -530,13 +597,10 @@ class CloseTicketView(View):
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
         await perform_ticket_closure(interaction.channel, interaction.user) 
-
-
 # =============================
 # VERIFICATION VIEW
 # =============================
 class VerificationView(View):
-    # This view is only used for STANDARD (V1-only) apps now.
     def __init__(self, ticket_channel, user, app_name_key, screenshot_url):
         super().__init__(timeout=3600) 
         self.ticket_channel = ticket_channel
@@ -614,7 +678,9 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-        # =============================
+
+
+# =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
@@ -895,7 +961,6 @@ async def refresh_panel(interaction: discord.Interaction):
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
 
-
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
@@ -905,7 +970,9 @@ async def refresh_panel(interaction: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
     await create_new_ticket(interaction)
-    # =============================
+
+
+# =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
 @bot.event
