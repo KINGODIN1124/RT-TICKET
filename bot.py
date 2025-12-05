@@ -518,9 +518,7 @@ class CloseTicketView(View):
     def __init__(self):
         super().__init__(timeout=None)
          @discord.ui.button(
-        label="🔒 Close Ticket",
-        style=discord.ButtonStyle.red,
-        custom_id="persistent_close_ticket_button" 
+        label="🔒 Close Ticket",style=discord.ButtonStyle.red,custom_id="persistent_close_ticket_button" 
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         
