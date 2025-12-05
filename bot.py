@@ -16,6 +16,15 @@ from threading import Thread
 # Apps requiring the two-step verification process (MUST be lowercase)
 V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
 
+# Cooldown time in hours (168 hours = 7 days)
+COOLDOWN_HOURS = 168
+
+# Ticket operational hours
+TICKET_START_HOUR_UTC = 7   # 7:00 AM UTC
+TICKET_END_HOUR_UTC = 22    # 10:00 PM UTC (22:00)
+
+TICKET_CREATION_STATUS = True 
+
 # ---------------------------
 # Environment Variables
 # ---------------------------
@@ -85,7 +94,6 @@ def load_v2_links():
             return json.load(f)
     except FileNotFoundError:
         print("Warning: v2_links.json not found. Creating file with default data.")
-        # User needs to update these links to their actual hosted HTML pages
         v2_site_url = "https://verification2-djde.onrender.com"
         default_v2 = {
             "bilibili": v2_site_url, 
@@ -100,7 +108,7 @@ v2_links = load_v2_links()
 # ---------------------------
 
 # ---------------------------
-# GLOBAL HELPER: Emoji Assignment
+# GLOBAL HELPER: Utility Functions
 # ---------------------------
 def get_app_emoji(app_key: str) -> str:
     """Assigns an appropriate emoji based on the app key (lowercase)."""
@@ -135,6 +143,21 @@ def get_app_emoji(app_key: str) -> str:
 
     return "✨"
 
+def is_ticket_time_allowed() -> bool:
+    """Checks if the current day is Saturday AND the time is between 7:00 AM and 10:00 PM UTC."""
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    current_hour = now_utc.hour
+    current_weekday = now_utc.weekday() # Monday is 0, Saturday is 5, Sunday is 6
+
+    # 1. Check Day: Only allow on Saturday (5)
+    if current_weekday != 5:
+        return False
+
+    # 2. Check Time: 7 <= hour < 22
+    if TICKET_START_HOUR_UTC <= current_hour < TICKET_END_HOUR_UTC:
+        return True
+    
+    return False
 
 # ---------------------------
 # Flask Keepalive Server
@@ -233,8 +256,29 @@ async def perform_ticket_closure(channel: discord.TextChannel, closer: discord.U
 # CORE TICKET LOGIC (Shared by /ticket and Button)
 # ---------------------------
 async def create_new_ticket(interaction: discord.Interaction):
-    """Handles the shared logic of checking cooldown, creating channel, and sending welcome message."""
-    
+    """Handles the shared logic of checking status, cooldown, creating channel, and sending welcome message."""
+    global TICKET_CREATION_STATUS
+
+    # 1. Check Global/Clock Status
+    if not TICKET_CREATION_STATUS or not is_ticket_time_allowed():
+        
+        closed_embed = discord.Embed(
+            title="Ticket System Offline 💥",
+            description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Saturday: {TICKET_START_HOUR_UTC}:00 to {TICKET_END_HOUR_UTC}:00 UTC).",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(
+            content="Ticket system shutting down... 🔴", 
+            ephemeral=True
+        )
+        await asyncio.sleep(0.5) 
+        
+        return await interaction.edit_original_response(
+            content=f"Ticket system closed! 💨",
+            embed=closed_embed
+        )
+
+    # 2. Check Cooldown
     user = interaction.user
     now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -254,7 +298,7 @@ async def create_new_ticket(interaction: discord.Interaction):
     
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    cooldowns[user.id] = now + datetime.timedelta(hours=168)
+    cooldowns[user.id] = now + datetime.timedelta(hours=COOLDOWN_HOURS)
 
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -289,7 +333,6 @@ async def create_new_ticket(interaction: discord.Interaction):
         inline=False
     )
     
-    # MODIFIED FIELD TO REFLECT CONDITIONAL 2-STEP PROCESS
     two_step_message = "Depending on the app selected, you will either receive your link immediately after verification OR be directed to a short second security step."
     
     embed.add_field(
@@ -372,7 +415,6 @@ class AppDropdown(Select):
                 color=discord.Color.from_rgb(255, 165, 0) # Orange/Gold
             )
             
-            # FIX: Using f-string for working YouTube link
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
@@ -381,7 +423,6 @@ class AppDropdown(Select):
                 inline=False
             )
             
-            # FIX: Using f-string for V2 link
             embed.add_field(
                 name="➡️ STEP 2: FINAL KEY CHECK (V2)",
                 value=f"This step is required **AFTER** Admin approves your Step 1 proof.\n"
@@ -399,7 +440,6 @@ class AppDropdown(Select):
                 color=discord.Color.blue()
             )
             
-            # FIX: Using f-string for working YouTube link
             embed.add_field(
                 name="➡️ STEP 1: INITIAL SUBSCRIPTION PROOF (V1)",
                 value=f"1. Subscribe to our channel: **[Click Here]({YOUTUBE_CHANNEL_URL})**\n"
@@ -476,8 +516,7 @@ class TicketPanelButton(View):
 class CloseTicketView(View):
     def __init__(self):
         super().__init__(timeout=None) 
-
-    @discord.ui.button(
+@discord.ui.button(
         label="🔒 Close Ticket",
         style=discord.ButtonStyle.red,
         custom_id="persistent_close_ticket_button" 
@@ -516,16 +555,47 @@ class VerificationView(View):
         app_key = self.app_name_key
         user = self.user
         app_name_display = app_key.title()
-        # --- PATH B: STANDARD (Single-Step Verification) ---
         
-        # Deliver link and send closure prompt (V1 Standard App only)
-        await deliver_and_close(self.ticket_channel, user, app_key)
-        
-        # Update verification panel message and disable button
-        self.stop()
-        await interaction.message.edit(content=f"✅ **VERIFIED:** Link sent to {user.mention}.", view=None)
-        
-        await interaction.response.send_message("Verified! Link sent.", ephemeral=True)
+        # --- PATH A: V2 (Multi-Step Verification) ---
+        if self.app_name_key in V2_APPS_LIST:
+            
+            links_v2 = load_v2_links()
+            v2_link = links_v2.get(self.app_name_key)
+            
+            if not v2_link:
+                return await interaction.response.send_message(f"❌ Error: V2 link not configured for {app_name_display}.", ephemeral=True)
+
+            # V1 is manually approved. Now send V2 prompt to user.
+            embed_prompt = discord.Embed(
+                title=f"✅ V1 Proof Approved for {app_name_display}!",
+                description=f"Initial subscription proof verified by {interaction.user.mention}. \n\n"
+                            "**{self.user.mention}** please proceed to the next step using the link and instructions provided when you selected the app.",
+                color=discord.Color.gold()
+            )
+            
+            class V2LinkView(View):
+                def __init__(self, url):
+                    super().__init__(timeout=None)
+                    self.add_item(discord.ui.Button(label=f"GO TO V2 VERIFICATION SITE", url=url, style=discord.ButtonStyle.link))
+            
+            await self.ticket_channel.send(embed=embed_prompt, view=V2LinkView(v2_link))
+            
+            # Update verification panel message and disable button
+            self.stop()
+            await interaction.message.edit(content=f"✅ **V1 Approved:** Waiting for V2 proof from {self.user.mention}.", view=None)
+
+            return await interaction.response.send_message(f"✅ V1 approved. Waiting for V2 screenshot.", ephemeral=True)
+
+        else:
+            # --- PATH B: STANDARD (Single-Step Verification) ---
+            
+            await deliver_and_close(self.ticket_channel, user, app_key)
+            
+            # Update verification panel message and disable button
+            self.stop()
+            await interaction.message.edit(content=f"✅ **VERIFIED:** Link sent to {user.mention}.", view=None)
+            
+            await interaction.response.send_message("Verified! Link sent.", ephemeral=True)
 
 
     @discord.ui.button(label="❌ Decline", style=discord.ButtonStyle.red, custom_id="decline_button")
@@ -694,6 +764,24 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+# --- /ticket_stop ---
+@bot.tree.command(name="ticket_stop", description="❌ Manually disable all ticket creation.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def ticket_stop(interaction: discord.Interaction):
+    global TICKET_CREATION_STATUS
+    TICKET_CREATION_STATUS = False
+    await interaction.response.send_message("❌ Ticket creation has been manually **DISABLED**.", ephemeral=True)
+
+# --- /ticket_start ---
+@bot.tree.command(name="ticket_start", description="✅ Manually enable all ticket creation.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def ticket_start(interaction: discord.Interaction):
+    global TICKET_CREATION_STATUS
+    TICKET_CREATION_STATUS = True
+    await interaction.response.send_message("✅ Ticket creation has been manually **ENABLED**.", ephemeral=True)
+
 
 # --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
@@ -811,7 +899,9 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-    # =============================
+
+
+# =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
@@ -848,7 +938,6 @@ async def on_message(message):
         is_v2_app = app_key in V2_APPS_LIST
         
         # --- CHECK 1: V2 Final Screenshot Submission ---
-        # Look for [APP NAME] KEY in the content for V2 apps
         v2_key_word = f"{app_name_display.upper()} KEY" 
         is_v2_verified = v2_key_word in content_upper
         
