@@ -144,16 +144,11 @@ def get_app_emoji(app_key: str) -> str:
     return "✨"
 
 def is_ticket_time_allowed() -> bool:
-    """Checks if the current day is Saturday AND the time is between 2:00 PM and 11:59 PM UTC."""
+    """Checks if the current time is between 2:00 PM and 11:59 PM UTC."""
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     current_hour = now_utc.hour
-    current_weekday = now_utc.weekday() # Monday is 0, Saturday is 5, Sunday is 6
-
-    # 1. Check Day: Only allow on Saturday (5)
-    if current_weekday != 5:
-        return False
-
-    # 2. Check Time: 14 <= hour < 24
+    
+    # Check Time: 14 <= hour < 24 (Daily operation)
     if TICKET_START_HOUR_UTC <= current_hour < TICKET_END_HOUR_UTC:
         return True
     
@@ -263,9 +258,9 @@ async def create_new_ticket(interaction: discord.Interaction):
     if not TICKET_CREATION_STATUS or not is_ticket_time_allowed():
         
         closed_embed = discord.Embed(
-            # UPDATED TEXT TO REFLECT NEW HOURS
+            # UPDATED TEXT TO REFLECT DAILY OPERATION
             title="Ticket System Offline 💥",
-            description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Saturday: {TICKET_START_HOUR_UTC}:00 to {TICKET_END_HOUR_UTC - 1}:59 UTC).",
+            description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Daily: {TICKET_START_HOUR_UTC}:00 to {TICKET_END_HOUR_UTC - 1}:59 UTC).",
             color=discord.Color.red()
         )
         await interaction.response.send_message(
@@ -516,9 +511,12 @@ class TicketPanelButton(View):
 # =============================
 class CloseTicketView(View):
     def __init__(self):
-        super().__init__(timeout=None)
-         @discord.ui.button(
-        label="🔒 Close Ticket",style=discord.ButtonStyle.red,custom_id="persistent_close_ticket_button" 
+        super().__init__(timeout=None) 
+
+    @discord.ui.button(
+        label="🔒 Close Ticket",
+        style=discord.ButtonStyle.red,
+        custom_id="persistent_close_ticket_button" 
     )
     async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         
@@ -538,6 +536,7 @@ class CloseTicketView(View):
 # VERIFICATION VIEW
 # =============================
 class VerificationView(View):
+    # This view is only used for STANDARD (V1-only) apps now.
     def __init__(self, ticket_channel, user, app_name_key, screenshot_url):
         super().__init__(timeout=3600) 
         self.ticket_channel = ticket_channel
@@ -615,7 +614,7 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-    # =============================
+        # =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
@@ -760,6 +759,24 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
+# --- /ticket_stop ---
+@bot.tree.command(name="ticket_stop", description="❌ Manually disable all ticket creation.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def ticket_stop(interaction: discord.Interaction):
+    global TICKET_CREATION_STATUS
+    TICKET_CREATION_STATUS = False
+    await interaction.response.send_message("❌ Ticket creation has been manually **DISABLED**.", ephemeral=True)
+
+# --- /ticket_start ---
+@bot.tree.command(name="ticket_start", description="✅ Manually enable all ticket creation.")
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def ticket_start(interaction: discord.Interaction):
+    global TICKET_CREATION_STATUS
+    TICKET_CREATION_STATUS = True
+    await interaction.response.send_message("✅ Ticket creation has been manually **ENABLED**.", ephemeral=True)
+
 
 # --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
@@ -877,7 +894,9 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-    # =============================
+
+
+# =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
 
@@ -886,9 +905,7 @@ async def refresh_panel(interaction: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
     await create_new_ticket(interaction)
-
-
-# =============================
+    # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
 @bot.event
