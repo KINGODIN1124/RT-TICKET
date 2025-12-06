@@ -681,7 +681,9 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-        # =============================
+        True)
+
+# =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
@@ -962,7 +964,7 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-
+    
 
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
@@ -973,7 +975,7 @@ async def refresh_panel(interaction: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
     await create_new_ticket(interaction)
-
+    
 # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
 # =============================
