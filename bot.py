@@ -153,7 +153,7 @@ def is_ticket_time_allowed() -> bool:
     
     return False
 
-# NEW OCR FUNCTION
+# NEW: OCR check using Google Cloud Vision
 async def check_v1_ocr(image_url: str) -> bool:
     """Performs OCR check on the image URL for V1 Subscription Proof."""
     
@@ -172,7 +172,7 @@ async def check_v1_ocr(image_url: str) -> bool:
 
         print(f"OCR TEXT DETECTED: {full_text[:100]}...")
         
-        # Check for all required keywords (RASH, TECH, SUBSCRIBED)
+        # Check for all required keywords
         for keyword in V1_REQUIRED_KEYWORDS:
             if keyword not in full_text:
                 print(f"OCR FAILED: Missing keyword '{keyword}'")
@@ -514,6 +514,7 @@ class AppDropdown(Select):
             )
             
         await interaction.followup.send(embed=embed, ephemeral=False)
+
 class AppSelect(View):
     def __init__(self, user):
         super().__init__(timeout=1800)
@@ -597,6 +598,8 @@ class CloseTicketView(View):
         await interaction.edit_original_response(content="Ticket processing transcript and deleting now. 💨")
         
         await perform_ticket_closure(interaction.channel, interaction.user) 
+
+
 # =============================
 # VERIFICATION VIEW
 # =============================
@@ -678,15 +681,13 @@ class VerificationView(View):
         await interaction.message.edit(content="❌ **DECLINED:** User has been notified.", view=None)
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
-
-
-# =============================
+        # =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
 # --- /verify_v2_final ---
 @bot.tree.command(name="verify_v2_final", description="✅ Complete Verification 2 and send the final premium link.")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def verify_v2_final(interaction: discord.Interaction, app_name: str, user: discord.Member):
 
@@ -717,7 +718,7 @@ async def verify_v2_final(interaction: discord.Interaction, app_name: str, user:
 
 # --- /add_app ---
 @bot.tree.command(name="add_app", description="➕ Add a new premium app to the database")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def add_app(interaction: discord.Interaction, app_name: str, app_link: str):
     
@@ -740,7 +741,7 @@ async def add_app(interaction: discord.Interaction, app_name: str, app_link: str
 
 # --- /remove_app ---
 @bot.tree.command(name="remove_app", description="➖ Remove an app from the database")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_app(interaction: discord.Interaction, app_name: str):
     
@@ -770,7 +771,7 @@ async def remove_app(interaction: discord.Interaction, app_name: str):
 
 # --- /view_apps ---
 @bot.tree.command(name="view_apps", description="📋 View all applications and their links in the database")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def view_apps(interaction: discord.Interaction):
     
@@ -802,10 +803,11 @@ async def view_apps(interaction: discord.Interaction):
 
 # --- /remove_cooldown ---
 @bot.tree.command(name="remove_cooldown", description="🧹 Remove a user's ticket cooldown")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def remove_cooldown(interaction: discord.Interaction, user: discord.Member):
 
+    global cooldowns
     await interaction.response.defer(ephemeral=True)
 
     if user.id in cooldowns:
@@ -827,7 +829,7 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
 
 # --- /ticket_stop ---
 @bot.tree.command(name="ticket_stop", description="❌ Manually disable all ticket creation.")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def ticket_stop(interaction: discord.Interaction):
     global TICKET_CREATION_STATUS
@@ -836,7 +838,7 @@ async def ticket_stop(interaction: discord.Interaction):
 
 # --- /ticket_start ---
 @bot.tree.command(name="ticket_start", description="✅ Manually enable all ticket creation.")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def ticket_start(interaction: discord.Interaction):
     global TICKET_CREATION_STATUS
@@ -846,7 +848,7 @@ async def ticket_start(interaction: discord.Interaction):
 
 # --- /force_close ---
 @bot.tree.command(name="force_close", description="🔒 Force close a specific ticket channel (or current one)")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_channels=True))
 @app_commands.checks.has_permissions(manage_channels=True)
 @app_commands.describe(channel="Optional: Specify a ticket channel to close.")
 async def force_close(interaction: discord.Interaction, channel: discord.TextChannel = None): 
@@ -873,7 +875,7 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
 
 # --- /send_app ---
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket (legacy/manual send)")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def send_app(interaction: discord.Interaction, app_name: str, user: discord.Member):
 
@@ -918,7 +920,7 @@ async def send_app(interaction: discord.Interaction, app_name: str, user: discor
 
 # --- /view_tickets ---
 @bot.tree.command(name="view_tickets", description="📊 View number of currently open tickets")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_channels=True))
 @app_commands.checks.has_permissions(manage_channels=True)
 async def view_tickets(interaction: discord.Interaction):
 
@@ -948,7 +950,7 @@ async def view_tickets(interaction: discord.Interaction):
 
 # --- /refresh_panel ---
 @bot.tree.command(name="refresh_panel", description="🔄 Deletes and resends the ticket creation panel.")
-@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.guilds(discord.Object(id=GUILD_ID), default_permissions=discord.Permissions(manage_guild=True))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def refresh_panel(interaction: discord.Interaction):
     
@@ -961,6 +963,7 @@ async def refresh_panel(interaction: discord.Interaction):
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
 
+
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
@@ -970,7 +973,6 @@ async def refresh_panel(interaction: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
     await create_new_ticket(interaction)
-
 
 # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
