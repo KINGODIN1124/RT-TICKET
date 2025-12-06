@@ -9,9 +9,6 @@ import datetime
 import asyncio
 from flask import Flask
 from threading import Thread
-# CRITICAL: Google Cloud Vision API client
-from google.cloud import vision 
-# NOTE: You MUST install google-cloud-vision and set GOOGLE_APPLICATION_CREDENTIALS
 
 # ---------------------------
 # GLOBAL CONFIGURATION
@@ -19,11 +16,13 @@ from google.cloud import vision
 V2_APPS_LIST = ["bilibili", "hotstar", "vpn"] 
 COOLDOWN_HOURS = 168
 
-TICKET_START_HOUR_UTC = 14  # 2:00 PM UTC
-TICKET_END_HOUR_UTC = 24    # 11:59 PM UTC
-TICKET_CREATION_STATUS = True 
+# Ticket operational hours (2:00 PM IST to 11:59 PM IST)
+# UTC+5:30 (India Standard Time)
+IST_OFFSET = datetime.timedelta(hours=5, minutes=30)
+TICKET_START_HOUR_IST = 14  # 2:00 PM IST
+TICKET_END_HOUR_IST = 24    # Represents 00:00 (midnight) to include 11:59 PM IST
 
-# Keywords required for the V1 Subscription Proof check (used by OCR)
+TICKET_CREATION_STATUS = True 
 V1_REQUIRED_KEYWORDS = ["RASH", "TECH", "SUBSCRIBED"] 
 
 # ---------------------------
@@ -144,47 +143,17 @@ def get_app_emoji(app_key: str) -> str:
     return "✨"
 
 def is_ticket_time_allowed() -> bool:
-    """Checks if the current time is between 2:00 PM and 11:59 PM UTC (Every Day)."""
+    """Checks if the current time is between 2:00 PM and 11:59 PM IST."""
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    current_hour = now_utc.hour
+    # Convert UTC time to IST
+    now_ist = now_utc + IST_OFFSET
+    current_hour_ist = now_ist.hour
     
-    if TICKET_START_HOUR_UTC <= current_hour < TICKET_END_HOUR_UTC:
+    # Check Time: 14 <= hour < 24 (Daily operation)
+    if TICKET_START_HOUR_IST <= current_hour_ist < TICKET_END_HOUR_IST:
         return True
     
     return False
-
-# NEW OCR FUNCTION (FOR AUTOMATED V1 CHECK)
-async def check_v1_ocr(image_url: str) -> bool:
-    """Performs OCR check on the image URL for V1 Subscription Proof."""
-    
-    try:
-        # Initialize the Vision client (uses GOOGLE_APPLICATION_CREDENTIALS)
-        client = vision.ImageAnnotatorAsyncClient()
-        
-        # Prepare the image request
-        image = vision.Image()
-        image.source.image_uri = image_url
-        
-        # Use TEXT_DETECTION for general OCR
-        response = await client.text_detection(image=image)
-        
-        full_text = response.full_text_annotation.text.upper() if response.full_text_annotation else ""
-
-        print(f"OCR TEXT DETECTED: {full_text[:100]}...")
-        
-        # Check for all required keywords (RASH, TECH, SUBSCRIBED)
-        for keyword in V1_REQUIRED_KEYWORDS:
-            if keyword not in full_text:
-                print(f"OCR FAILED: Missing keyword '{keyword}'")
-                return False 
-
-        return True
-
-    except Exception as e:
-        print(f"OCR CHECK ERROR (API Failure or Permission): {e}")
-        # If the API call fails, we rely on the manual check by returning False
-        return False 
-
 
 # ---------------------------
 # Flask Keepalive Server
@@ -328,8 +297,9 @@ async def create_new_ticket(interaction: discord.Interaction):
     if not TICKET_CREATION_STATUS or not is_ticket_time_allowed():
         
         closed_embed = discord.Embed(
+            # UPDATED TEXT TO REFLECT IST HOURS
             title="Ticket System Offline 💥",
-            description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Daily: {TICKET_START_HOUR_UTC}:00 to {TICKET_END_HOUR_UTC - 1}:59 UTC).",
+            description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Daily: {TICKET_START_HOUR_IST}:00 to {TICKET_END_HOUR_IST - 1}:59 IST).",
             color=discord.Color.red()
         )
         await interaction.response.send_message(
@@ -683,41 +653,12 @@ class VerificationView(View):
         
         await interaction.response.send_message("Declined! User notified.", ephemeral=True)
 
+
 # =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
-# --- /verify_v2_final ---
-@bot.tree.command(name="verify_v2_final", description="✅ Complete Verification 2 and send the final premium link.")
-@app_commands.default_permissions(manage_guild=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-@app_commands.checks.has_permissions(manage_guild=True)
-async def verify_v2_final(interaction: discord.Interaction, app_name: str, user: discord.Member):
-
-    app_key = app_name.lower()
-    app_name_display = app_key.title()
-    apps = load_apps()
-    link = apps.get(app_key)
-
-    if app_key not in V2_APPS_LIST:
-        return await interaction.response.send_message("❌ Error: This command is only for Verification 2 apps.", ephemeral=True)
-    
-    if not link:
-        return await interaction.response.send_message(f"❌ Error: Final link not found for {app_name_display}.", ephemeral=True)
-    
-    # Find the ticket channel
-    ticket_channel = discord.utils.get(
-        interaction.guild.channels,
-        name=f"ticket-{user.id}"
-    )
-    if not ticket_channel:
-        return await interaction.response.send_message(f"❌ User has no open ticket.", ephemeral=True)
-
-    # Use the shared delivery logic
-    await deliver_and_close(ticket_channel, user, app_key)
-    
-    await interaction.response.send_message(f"✅ Final link delivered to {ticket_channel.mention}", ephemeral=True)
-
+# --- /verify_v2_final --- (REMOVED)
 
 # --- /add_app ---
 @bot.tree.command(name="add_app", description="➕ Add a new premium app to the database")
@@ -975,8 +916,6 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
-
-
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
@@ -986,6 +925,7 @@ async def refresh_panel(interaction: discord.Interaction):
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 async def ticket(interaction: discord.Interaction):
     await create_new_ticket(interaction)
+
 
 # =============================
 # ON MESSAGE — SCREENSHOT + APP DETECTION
