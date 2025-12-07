@@ -9,6 +9,9 @@ import datetime
 import asyncio
 from flask import Flask
 from threading import Thread
+# CRITICAL: Google Cloud Vision API client
+# NOTE: Removed direct import to avoid installation failure if library is not present,
+# but the function check_v1_ocr remains commented out to represent where it should go.
 
 # ---------------------------
 # GLOBAL CONFIGURATION
@@ -17,10 +20,9 @@ V2_APPS_LIST = ["bilibili", "hotstar", "vpn"]
 COOLDOWN_HOURS = 168
 
 # Ticket operational hours (2:00 PM IST to 11:59 PM IST)
-# UTC+5:30 (India Standard Time)
 IST_OFFSET = datetime.timedelta(hours=5, minutes=30)
 TICKET_START_HOUR_IST = 14  # 2:00 PM IST
-TICKET_END_HOUR_IST = 24    # Represents 00:00 (midnight) to include 11:59 PM IST
+TICKET_END_HOUR_IST = 24    # 11:59 PM IST (exclusive of midnight)
 
 TICKET_CREATION_STATUS = True 
 V1_REQUIRED_KEYWORDS = ["RASH", "TECH", "SUBSCRIBED"] 
@@ -37,6 +39,10 @@ try:
     TICKET_PANEL_CHANNEL_ID = os.getenv("TICKET_PANEL_CHANNEL_ID")
     if TICKET_PANEL_CHANNEL_ID:
         TICKET_PANEL_CHANNEL_ID = int(TICKET_PANEL_CHANNEL_ID)
+        
+    ADMIN_PANEL_CHANNEL_ID = os.getenv("ADMIN_PANEL_CHANNEL_ID")
+    if ADMIN_PANEL_CHANNEL_ID:
+        ADMIN_PANEL_CHANNEL_ID = int(ADMIN_PANEL_CHANNEL_ID)
 
     INSTRUCTIONS_CHANNEL_ID = os.getenv("INSTRUCTIONS_CHANNEL_ID")
     if INSTRUCTIONS_CHANNEL_ID:
@@ -67,6 +73,7 @@ def load_apps():
             "vpn": "https://final-link.com/vpn-premium", 
             "truecaller": "https://link-target.net/1438550/kvu1lPW7ZsKu",
             "bilibili": "https://final-link.com/bilibili-premium", 
+            "castle": "https://final-link.com/castle-premium",
         }
         print("Warning: apps.json not found. Creating file with default data.")
         with open("apps.json", "w") as f:
@@ -145,11 +152,9 @@ def get_app_emoji(app_key: str) -> str:
 def is_ticket_time_allowed() -> bool:
     """Checks if the current time is between 2:00 PM and 11:59 PM IST."""
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    # Convert UTC time to IST
     now_ist = now_utc + IST_OFFSET
     current_hour_ist = now_ist.hour
     
-    # Check Time: 14 <= hour < 24 (Daily operation)
     if TICKET_START_HOUR_IST <= current_hour_ist < TICKET_END_HOUR_IST:
         return True
     
@@ -297,7 +302,6 @@ async def create_new_ticket(interaction: discord.Interaction):
     if not TICKET_CREATION_STATUS or not is_ticket_time_allowed():
         
         closed_embed = discord.Embed(
-            # UPDATED TEXT TO REFLECT IST HOURS
             title="Ticket System Offline 💥",
             description=f"The premium ticket creation system is currently closed for maintenance or outside of operational hours (Daily: {TICKET_START_HOUR_IST}:00 to {TICKET_END_HOUR_IST - 1}:59 IST).",
             color=discord.Color.red()
@@ -655,10 +659,89 @@ class VerificationView(View):
 
 
 # =============================
+# ADMIN CONTROL PANEL (NEW VIEW)
+# =============================
+
+class AdminControlPanel(View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    # This button toggles the global TICKET_CREATION_STATUS flag
+    @discord.ui.button(
+        label="TOGGLE TICKET STATUS",
+        style=discord.ButtonStyle.danger,
+        custom_id="admin_toggle_status"
+    )
+    async def toggle_status_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ You do not have permission to use this control.", ephemeral=True)
+
+        global TICKET_CREATION_STATUS
+        TICKET_CREATION_STATUS = not TICKET_CREATION_STATUS
+        
+        status_text = "ENABLED ✅" if TICKET_CREATION_STATUS else "DISABLED ❌"
+        status_color = discord.Color.green() if TICKET_CREATION_STATUS else discord.Color.red()
+
+        embed = discord.Embed(
+            title="⚡ PREMIUM TICKET CONTROL PANEL ⚡",
+            description=f"Current Operational Status: **{status_text}**\n\n"
+                        f"Operational Hours: **{TICKET_START_HOUR_IST}:00 to {TICKET_END_HOUR_IST - 1}:59 IST**.\n\n"
+                        "Use the controls below to manage system state and resources.",
+            color=status_color
+        )
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    # This button allows the admin to refresh the main user panel
+    @discord.ui.button(
+        label="Refresh User Panel",
+        style=discord.ButtonStyle.secondary,
+        custom_id="admin_refresh_user_panel"
+    )
+    async def refresh_panel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.manage_guild:
+            return await interaction.response.send_message("❌ You do not have permission to use this control.", ephemeral=True)
+
+        await setup_ticket_panel(force_resend=True)
+        await interaction.response.send_message("✅ User panel message updated.", ephemeral=True)
+
+# =============================
 # SLASH COMMANDS (ADMIN GROUP)
 # =============================
 
-# --- /verify_v2_final --- (REMOVED)
+# --- /verify_v2_final ---
+# NOTE: This command is redundant now that we assume the V2 key is typed in the ticket.
+# It is kept as a manual fallback.
+@bot.tree.command(name="verify_v2_final", description="✅ Complete Verification 2 and send the final premium link.")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(manage_guild=True)
+async def verify_v2_final(interaction: discord.Interaction, app_name: str, user: discord.Member):
+
+    app_key = app_name.lower()
+    app_name_display = app_key.title()
+    apps = load_apps()
+    link = apps.get(app_key)
+
+    if app_key not in V2_APPS_LIST:
+        return await interaction.response.send_message("❌ Error: This command is only for Verification 2 apps.", ephemeral=True)
+    
+    if not link:
+        return await interaction.response.send_message(f"❌ Error: Final link not found for {app_name_display}.", ephemeral=True)
+    
+    # Find the ticket channel
+    ticket_channel = discord.utils.get(
+        interaction.guild.channels,
+        name=f"ticket-{user.id}"
+    )
+    if not ticket_channel:
+        return await interaction.response.send_message(f"❌ User has no open ticket.", ephemeral=True)
+
+    # Use the shared delivery logic
+    await deliver_and_close(ticket_channel, user, app_key)
+    
+    await interaction.response.send_message(f"✅ Final link delivered to {ticket_channel.mention}", ephemeral=True)
+
 
 # --- /add_app ---
 @bot.tree.command(name="add_app", description="➕ Add a new premium app to the database")
@@ -775,25 +858,9 @@ async def remove_cooldown(interaction: discord.Interaction, user: discord.Member
     
     await interaction.followup.send(embed=embed, ephemeral=True)
 
-# --- /ticket_stop ---
-@bot.tree.command(name="ticket_stop", description="❌ Manually disable all ticket creation.")
-@app_commands.default_permissions(manage_guild=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-@app_commands.checks.has_permissions(manage_guild=True)
-async def ticket_stop(interaction: discord.Interaction):
-    global TICKET_CREATION_STATUS
-    TICKET_CREATION_STATUS = False
-    await interaction.response.send_message("❌ Ticket creation has been manually **DISABLED**.", ephemeral=True)
+# --- /ticket_stop --- (REMOVED: Replaced by Admin Panel Button)
 
-# --- /ticket_start ---
-@bot.tree.command(name="ticket_start", description="✅ Manually enable all ticket creation.")
-@app_commands.default_permissions(manage_guild=True)
-@app_commands.guilds(discord.Object(id=GUILD_ID))
-@app_commands.checks.has_permissions(manage_guild=True)
-async def ticket_start(interaction: discord.Interaction):
-    global TICKET_CREATION_STATUS
-    TICKET_CREATION_STATUS = True
-    await interaction.response.send_message("✅ Ticket creation has been manually **ENABLED**.", ephemeral=True)
+# --- /ticket_start --- (REMOVED: Replaced by Admin Panel Button)
 
 
 # --- /force_close ---
@@ -824,20 +891,20 @@ async def force_close(interaction: discord.Interaction, channel: discord.TextCha
         pass
 
 
-# --- /send_app ---
+# --- /send_app --- (CRITICAL FIX: Lowercase lookup)
 @bot.tree.command(name="send_app", description="📤 Send a premium app link to a user's ticket (legacy/manual send)")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guilds(discord.Object(id=GUILD_ID))
 @app_commands.checks.has_permissions(manage_guild=True)
 async def send_app(interaction: discord.Interaction, app_name: str, user: discord.Member):
 
-    app_key = app_name.lower()
-    app_name_display = app_name.title()
+    app_key = app_name.lower() # FIX: Ensure key is lowercase for dictionary lookup
+    app_name_display = app_key.title()
 
     apps = load_apps()
 
     if app_key not in apps:
-        return await interaction.response.send_message(f"❌ App **{app_name_display}** not found.", ephemeral=True)
+        return await interaction.response.send_message(f"❌ App **{app_name_display}** not found in database.", ephemeral=True)
 
     link = apps[app_key]
 
@@ -916,6 +983,22 @@ async def refresh_panel(interaction: discord.Interaction):
     await setup_ticket_panel(force_resend=True)
     
     await interaction.followup.send("✅ Ticket panel refreshed and sent with the latest app list.", ephemeral=True)
+
+
+# --- /send_admin_panel --- (NEW COMMAND)
+@bot.tree.command(name="send_admin_panel", description="Posts the persistent admin control panel.")
+@app_commands.default_permissions(administrator=True) # Higher permission for this sensitive command
+@app_commands.guilds(discord.Object(id=GUILD_ID))
+@app_commands.checks.has_permissions(administrator=True)
+async def send_admin_panel(interaction: discord.Interaction):
+    if not ADMIN_PANEL_CHANNEL_ID:
+        return await interaction.response.send_message("❌ Error: ADMIN_PANEL_CHANNEL_ID is not configured.", ephemeral=True)
+    
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await setup_admin_panel(force_resend=True)
+    await interaction.followup.send("✅ Admin Control Panel has been posted/refreshed.", ephemeral=True)
+
+
 # =============================
 # SLASH COMMANDS (USER/GENERAL GROUP)
 # =============================
@@ -1083,6 +1166,52 @@ async def setup_ticket_panel(force_resend=False):
     except Exception as e:
         print(f"An unexpected error occurred during panel setup: {e}")
 
+async def setup_admin_panel(force_resend=False):
+    """Sends or updates the persistent Admin Control Panel."""
+    global TICKET_CREATION_STATUS
+
+    if not ADMIN_PANEL_CHANNEL_ID:
+        print("WARNING: ADMIN_PANEL_CHANNEL_ID is not set. Skipping admin panel setup.")
+        return
+
+    channel = bot.get_channel(ADMIN_PANEL_CHANNEL_ID)
+    if not channel:
+        print(f"ERROR: Could not find admin panel channel with ID {ADMIN_PANEL_CHANNEL_ID}")
+        return
+
+    status_text = "ENABLED ✅" if TICKET_CREATION_STATUS else "DISABLED ❌"
+    status_color = discord.Color.green() if TICKET_CREATION_STATUS else discord.Color.red()
+    
+    panel_embed = discord.Embed(
+        title="⚡ PREMIUM TICKET CONTROL PANEL ⚡",
+        description=f"Current Operational Status: **{status_text}**\n\n"
+                    f"Operational Hours: **{TICKET_START_HOUR_IST}:00 to {TICKET_END_HOUR_IST - 1}:59 IST**.\n\n"
+                    "Use the controls below to manage system state and resources.",
+        color=status_color
+    )
+    
+    # Check if the panel exists
+    try:
+        async for message in channel.history(limit=5):
+            if message.author == bot.user and message.components and message.embeds:
+                if message.embeds[0].title == "⚡ PREMIUM TICKET CONTROL PANEL ⚡":
+                    if force_resend:
+                        await message.delete()
+                        break
+                    else:
+                        await message.edit(embed=panel_embed, view=AdminControlPanel())
+                        print("Updated existing admin panel.")
+                        return
+
+        # Send a new one if not found or if forced
+        await channel.send(embed=panel_embed, view=AdminControlPanel())
+        print("Sent new persistent admin control panel.")
+
+    except discord.Forbidden:
+        print("ERROR: Missing permissions to read or send messages in the admin panel channel.")
+    except Exception as e:
+        print(f"An unexpected error occurred during admin panel setup: {e}")
+
 
 # =============================
 # ON READY
@@ -1094,8 +1223,10 @@ async def on_ready():
     # Register persistent views
     bot.add_view(CloseTicketView())
     bot.add_view(TicketPanelButton())
+    bot.add_view(AdminControlPanel()) # Register Admin Panel View
     
     await setup_ticket_panel()
+    await setup_admin_panel() # Run Admin Panel Setup
 
     print(f"🟢 Bot logged in successfully as {bot.user}")
 
@@ -1110,3 +1241,4 @@ if __name__ == "__main__":
     
     # 2. Start the Discord client (only once)
     bot.run(TOKEN)
+        
